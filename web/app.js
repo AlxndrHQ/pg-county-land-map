@@ -15,6 +15,7 @@
       water: "#E9E8E1", park: "#F2F2EB", building: "#F1F0EA",
       roadMajor: "#E2E0D8", roadMinor: "#EEEDE6", rail: "#D8D5CB",
       t: { c: "#3E6A8A", i: "#6B5B9A", g: "#3C7A5E", r: "#2F7A80", p: "#C4C1B6" },
+      tag: { gold: "#8A5A2B", clay: "#9B3D2E", blue: "#3E6A8A", violet: "#6B5B9A", green: "#3C7A5E", teal: "#2F7A80" },
     },
     dark: {
       bg: "#0E0E10", text: "#E8E6DF", muted: "#7A7A82", dim: "#56565D", line: "#26262B",
@@ -22,6 +23,7 @@
       water: "#141418", park: "#111113", building: "#131316",
       roadMajor: "#232328", roadMinor: "#1A1A1E", rail: "#2A2A30",
       t: { c: "#86A8C4", i: "#A99BD3", g: "#7FB89B", r: "#7CC3C8", p: "#36363D" },
+      tag: { gold: "#C9A875", clay: "#E0907A", blue: "#86A8C4", violet: "#A99BD3", green: "#7FB89B", teal: "#7CC3C8" },
     },
   };
   const TYPE_LABEL = { c: "Corporate / LLC", i: "Institutional", g: "Government", r: "Religious / nonprofit", p: "Individual" };
@@ -76,15 +78,23 @@
 
   function parcelLayers(P) {
     const typeColor = ["match", ["get", "t"], "c", P.t.c, "i", P.t.i, "g", P.t.g, "r", P.t.r, P.t.p];
+    const tc = tagColorExpr(P);
     return [
       { id: "parcel-hit", type: "fill", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
         paint: { "fill-color": P.bg, "fill-opacity": 0 } },
       { id: "parcel-line", type: "line", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
         paint: {
-          "line-color": typeColor,
+          "line-color": muteOthers ? P.edge : typeColor,
           "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.3, 15, 0.7, 18, 1.2],
           "line-opacity": ["case", ["==", ["get", "t"], "p"], 0.9, 0.95],
-        } },
+        }, filter: typeFilter() },
+      { id: "tag-fill", type: "fill", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
+        filter: tagFilter(), paint: { "fill-color": tc, "fill-opacity": 0.16 } },
+      { id: "tag-line", type: "line", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
+        filter: tagFilter(), paint: { "line-color": tc, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.9, 16, 1.6] } },
+      { id: "tag-dots", type: "circle", source: "tagdots", maxzoom: 13,
+        paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 1.8, 12, 3.2], "circle-color": ["get", "col"],
+                 "circle-opacity": 0.9, "circle-stroke-color": P.bg, "circle-stroke-width": 0.6 } },
       { id: "spokes", type: "line", source: "seldots", filter: ["==", ["geometry-type"], "LineString"],
         paint: { "line-color": P.accent, "line-width": 0.7, "line-opacity": 0.55 } },
       { id: "sel-dots", type: "circle", source: "seldots", maxzoom: 14, filter: ["==", ["get", "k"], "pt"],
@@ -112,6 +122,7 @@
       attribution: "Parcel data: MD iMAP, MDP, SDAT; PG County DPIE",
     };
     s.sources.seldots = { type: "geojson", data: dotsData() };
+    s.sources.tagdots = { type: "geojson", data: tagDotsData(P) };
     // Parcels sit above roads and below labels.
     const firstSymbol = s.layers.findIndex((l) => l.type === "symbol");
     s.layers.splice(firstSymbol < 0 ? s.layers.length : firstSymbol, 0, ...parcelLayers(P));
@@ -177,6 +188,7 @@
     try { localStorage.setItem("theme", explicit); } catch (e) {}
     applyThemeAttr();
     if (map && baseStyle) map.setStyle(fullStyle());
+    renderLegend();
   });
   systemDark.addEventListener("change", () => {
     if (explicit) return;
@@ -213,6 +225,7 @@
       wireBack();
       fillGroupRow(d);
       addProjectControl(id, d);
+      addTagControl(id, d);
       addParcelNotes(id, d);
       if (opts.fly && d.c && map) map.flyTo({ center: d.c, zoom: Math.max(map.getZoom(), 16.5), padding: drawerPad() });
     }).catch((e) => {
@@ -268,6 +281,7 @@
       <h2>${title}</h2>
       <p class="addr">${esc(d.a || "No site address on record")}</p>
       <div id="proj-slot"></div>
+      <div id="tag-slot"></div>
       ${privacyNote}
       <dl>
         ${d.pv ? "" : row("Mailing", [d.co, d.ma].filter(Boolean).map(esc).join("<br>") || "—")}
@@ -723,6 +737,183 @@
   }
   let lastProject = null;
 
+
+  // ---------- color tags (saved in this browser only) ----------
+  // A tag colors an owner's parcels across the map. Tagging a parcel that belongs to an entity
+  // owner tags that owner's whole group; a person's parcel (private) is tagged on its own.
+  // Each item keeps a snapshot of its parcel ids and centroids, so the map can draw dots
+  // county-wide without loading parcel details.
+  const TKEY = "rem.tags.v1", VKEY = "rem.view.v1";
+  const TAG_COLORS = ["gold", "clay", "blue", "violet", "green", "teal"];
+  let tags = [], view = { hide: [], mute: false };
+  try { tags = JSON.parse(localStorage.getItem(TKEY) || "[]"); } catch (e) { tags = []; }
+  try { view = { hide: [], mute: false, ...JSON.parse(localStorage.getItem(VKEY) || "{}") }; } catch (e) {}
+  var muteOthers = view.mute && tags.some((t) => t.on);
+  function saveTags() {
+    try { localStorage.setItem(TKEY, JSON.stringify(tags)); localStorage.setItem(VKEY, JSON.stringify(view)); } catch (e) {}
+    applyTags(); renderLegend();
+  }
+  const tagIds = (t) => [...new Set(t.items.flatMap((it) => it.ids))];
+  function idColor() {               // first visible tag wins when a parcel is in several
+    const m = new Map();
+    for (const t of tags) if (t.on) for (const it of t.items) for (const id of it.ids) if (!m.has(id)) m.set(id, t.color);
+    return m;
+  }
+  function tagColorExpr(P) {
+    const byColor = new Map();
+    for (const [id, c] of idColor()) { if (!byColor.has(c)) byColor.set(c, []); byColor.get(c).push(id); }
+    if (!byColor.size) return P.accent;
+    const e = ["match", ["get", "id"]];
+    for (const [c, ids] of byColor) e.push(ids, P.tag[c] || P.accent);
+    e.push(P.accent);
+    return e;
+  }
+  function tagFilter() { return ["in", ["get", "id"], ["literal", [...idColor().keys()]]]; }
+  function typeFilter() { return view.hide.length ? ["!", ["in", ["get", "t"], ["literal", view.hide]]] : ["has", "id"]; }
+  function tagDotsData(P) {
+    const f = [], seen = new Set();
+    for (const t of tags) if (t.on) for (const it of t.items) for (let i = 0; i < it.ids.length; i++) {
+      if (seen.has(it.ids[i]) || it.pts[2 * i] == null) continue;
+      seen.add(it.ids[i]);
+      f.push({ type: "Feature", properties: { col: P.tag[t.color] || P.accent },
+               geometry: { type: "Point", coordinates: [it.pts[2 * i], it.pts[2 * i + 1]] } });
+    }
+    return { type: "FeatureCollection", features: f };
+  }
+  function applyTags() {
+    muteOthers = view.mute && tags.some((t) => t.on);
+    if (!map || !map.getLayer("tag-line")) return;
+    const P = PAL[theme()], tc = tagColorExpr(P), tf = tagFilter();
+    map.setFilter("tag-fill", tf); map.setFilter("tag-line", tf);
+    map.setPaintProperty("tag-fill", "fill-color", tc); map.setPaintProperty("tag-line", "line-color", tc);
+    map.getSource("tagdots").setData(tagDotsData(P));
+    map.setFilter("parcel-line", typeFilter());
+    map.setPaintProperty("parcel-line", "line-color", muteOthers ? P.edge : parcelLayers(P)[1].paint["line-color"]);
+  }
+
+  // What a tag applied from this parcel covers: the owner's group, or just this parcel.
+  function tagTarget(id, d, idx) {
+    const g = !d.pv && d.g != null && idx ? idx.groups[d.g] : null;
+    if (g) return { k: "g", label: g.l, ids: g.ids, pts: g.pts, ac: g.ac };
+    return { k: "p", label: d.a || "Account " + d.acct, ids: [id], pts: d.c || [], ac: d.ac || 0 };
+  }
+  const itemHas = (it, id) => it.ids.includes(id);
+
+  function addTagControl(id, d) {
+    const slot = body.querySelector("#tag-slot");
+    if (!slot) return;
+    loadIndex().catch(() => null).then((idx) => {
+      if (!document.contains(slot)) return;
+      const target = tagTarget(id, d, idx);
+      const P = PAL[theme()];
+      let open = false, color = TAG_COLORS.find((c) => !tags.some((t) => t.color === c)) || "gold";
+      const paint = () => {
+        const mine = tags.filter((t) => t.items.some((it) => itHasTarget(it)));
+        slot.innerHTML = `<div class="tagrow">
+          ${mine.map((t) => `<button type="button" class="tagchip" data-show="${t.id}"><i style="background:${P.tag[t.color]}"></i>${esc(t.name)}</button>`).join("")}
+          <button type="button" class="linkish" data-toggle>${mine.length ? "Tags ▾" : "+ Color tag"}</button>
+          <div class="tagpick" ${open ? "" : "hidden"}>
+            <p class="sub">${target.k === "g" && target.ids.length > 1
+              ? `Colors all ${plural(target.ids.length, "parcel")} of ${esc(target.label)}.`
+              : target.k === "g" ? `Colors ${esc(target.label)}'s parcel.` : "Colors this parcel."}</p>
+            ${tags.map((t) => `<button type="button" class="chip" aria-pressed="${t.items.some(itHasTarget)}" data-t="${t.id}"><i style="background:${P.tag[t.color]}"></i>${esc(t.name)}</button>`).join("")}
+            <form class="newtag"><input name="n" placeholder="New tag, e.g. Federal" maxlength="60" aria-label="New tag name">
+              <span class="swatches">${TAG_COLORS.map((c) => `<button type="button" class="sw" data-c="${c}" aria-pressed="${c === color}" aria-label="${c}" style="background:${P.tag[c]}"></button>`).join("")}</span>
+              <button class="linkish" type="submit">Create</button></form>
+          </div></div>`;
+        slot.querySelector("[data-toggle]").addEventListener("click", () => { open = !open; paint(); });
+        slot.querySelectorAll("[data-show]").forEach((b) => b.addEventListener("click", () => showTag(b.dataset.show)));
+        slot.querySelectorAll("[data-t]").forEach((b) => b.addEventListener("click", () => {
+          const t = tags.find((x) => x.id === b.dataset.t);
+          if (t.items.some(itHasTarget)) t.items = t.items.filter((it) => !itHasTarget(it));
+          else t.items.push({ ...target, ids: [...target.ids], pts: [...target.pts] });
+          saveTags(); paint();
+        }));
+        slot.querySelectorAll(".sw").forEach((b) => b.addEventListener("click", () => {
+          color = b.dataset.c; slot.querySelectorAll(".sw").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        }));
+        slot.querySelector(".newtag").addEventListener("submit", (e) => {
+          e.preventDefault(); const n = e.target.n.value.trim(); if (!n) return;
+          tags.push({ id: newId(), name: n, color, on: true, items: [{ ...target, ids: [...target.ids], pts: [...target.pts] }] });
+          saveTags(); paint();
+        });
+      };
+      // the target is "in" a tag if an item covers this parcel and has the same scope
+      const itHasTarget = (it) => itemHas(it, id) && (it.k === target.k || it.k === "p");
+      paint();
+    });
+  }
+
+  function showTag(tid) {
+    const t = tags.find((x) => x.id === tid);
+    if (!t) return;
+    reqToken++;
+    const P = PAL[theme()], ids = tagIds(t);
+    const pts = t.items.flatMap((it) => it.pts);
+    setSelected([]);                 // let the tag's own color show
+    drawer.hidden = false;
+    const ac = t.items.reduce((a, it) => a + (it.ac || 0), 0);
+    body.innerHTML = `
+      <span class="lbl">Color tag · saved in this browser</span>
+      <h2 contenteditable="plaintext-only" spellcheck="false" class="pname" title="Click to rename">${esc(t.name)}</h2>
+      <p class="addr">${plural(ids.length, "parcel")} · ${acres(ac)}</p>
+      <div class="swatches big">${TAG_COLORS.map((c) => `<button type="button" class="sw" data-c="${c}" aria-pressed="${c === t.color}" aria-label="${c}" style="background:${P.tag[c]}"></button>`).join("")}</div>
+      <div class="lbl sec">Owners and parcels</div>
+      ${t.items.length ? `<ul class="plist ptab">${t.items.map((it, i) => `
+        <li><button type="button" data-i="${i}"><span>${esc(it.label)}</span><span class="sub">${it.k === "g" ? "owner · " : ""}${plural(it.ids.length, "parcel")} · ${acres(it.ac || 0)}</span></button>
+          <button type="button" class="rm" data-rm="${i}" aria-label="Remove from tag">×</button></li>`).join("")}</ul>`
+        : `<p class="note">Nothing tagged yet. Open a parcel and choose “+ Color tag”.</p>`}
+      <p class="note">Tags are your own markings, kept in this browser. They aren't part of the public record.</p>
+      <div class="pact"><button type="button" class="linkish" data-vis>${t.on ? "Hide on map" : "Show on map"}</button>
+        <button type="button" class="linkish danger" data-del>Delete tag</button></div>`;
+    const nm = body.querySelector(".pname");
+    nm.addEventListener("blur", () => { const v = nm.textContent.trim(); if (v && v !== t.name) { t.name = v.slice(0, 60); saveTags(); } });
+    nm.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); nm.blur(); } });
+    body.querySelectorAll(".sw").forEach((b) => b.addEventListener("click", () => { t.color = b.dataset.c; saveTags(); showTag(t.id); }));
+    body.querySelectorAll("[data-i]").forEach((b) => b.addEventListener("click", () => {
+      const it = t.items[+b.dataset.i];
+      if (it.k === "p") return select(it.ids[0], { fly: true });
+      loadIndex().then((idx) => {
+        const gid = idx.groups.findIndex((g) => g.l === it.label);
+        if (gid >= 0) showGroup(gid); else select(it.ids[0], { fly: true });
+      });
+    }));
+    body.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => { t.items.splice(+b.dataset.rm, 1); saveTags(); showTag(t.id); }));
+    body.querySelector("[data-vis]").addEventListener("click", () => { t.on = !t.on; saveTags(); showTag(t.id); });
+    body.querySelector("[data-del]").addEventListener("click", () => {
+      if (!confirm(`Delete the tag “${t.name}”?`)) return;
+      tags = tags.filter((x) => x.id !== t.id); saveTags(); closeDrawer();
+    });
+    if (map && pts.length) {
+      const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
+      map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: drawerPad(), maxZoom: 16 });
+    }
+  }
+
+  // Legend: owner types double as filters; tags list below with show/hide and "mute others".
+  const legend = document.getElementById("legend");
+  function renderLegend() {
+    const P = PAL[theme()];
+    const types = [["c", "--t-c"], ["i", "--t-i"], ["g", "--t-g"], ["r", "--t-r"], ["p", "--edge-strong"]];
+    const counts = new Map(tags.map((t) => [t.id, tagIds(t).length]));
+    legend.innerHTML = `
+      <span class="lbl">Owner</span>
+      ${types.map(([k, v]) => `<button type="button" class="key" data-type="${k}" aria-pressed="${!view.hide.includes(k)}" title="Show or hide on the map"><i style="--c:var(${v})"></i>${TYPE_LABEL[k]}</button>`).join("")}
+      ${tags.length ? `<span class="lbl tagslbl">Your tags</span>
+        ${tags.map((t) => `<span class="key tagkey"><button type="button" class="vis" data-vis="${t.id}" aria-pressed="${t.on}" aria-label="Show or hide ${esc(t.name)}"><i class="dot" style="background:${P.tag[t.color]}"></i></button><button type="button" class="tname" data-tag="${t.id}">${esc(t.name)} <span class="num dim">${counts.get(t.id)}</span></button></span>`).join("")}
+        <button type="button" class="key mute" aria-pressed="${view.mute}">Fade untagged parcels</button>` : ""}`;
+    legend.querySelectorAll("[data-type]").forEach((b) => b.addEventListener("click", () => {
+      const k = b.dataset.type;
+      view.hide = view.hide.includes(k) ? view.hide.filter((x) => x !== k) : [...view.hide, k];
+      saveTags();
+    }));
+    legend.querySelectorAll("[data-vis]").forEach((b) => b.addEventListener("click", () => {
+      const t = tags.find((x) => x.id === b.dataset.vis); t.on = !t.on; saveTags();
+    }));
+    legend.querySelectorAll("[data-tag]").forEach((b) => b.addEventListener("click", () => showTag(b.dataset.tag)));
+    const m = legend.querySelector(".mute"); if (m) m.addEventListener("click", () => { view.mute = !view.mute; saveTags(); });
+  }
+  renderLegend();
 
   // ---------- send project notes to a Google Doc (via the owner's Apps Script web app) ----------
   // The map is a public static site, so it cannot write to Drive by itself. The owner deploys
