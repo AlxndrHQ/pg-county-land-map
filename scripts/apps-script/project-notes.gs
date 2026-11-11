@@ -177,6 +177,7 @@ function answerPending() {
       doc.saveAndClose();
     } finally { lock.releaseLock(); }
   }
+  scheduleAnswers_();   // more may be waiting: keep going in short runs until none are left
 }
 
 /** The newest unanswered question (or the one with this tag), with the index of its last text paragraph. */
