@@ -51,6 +51,8 @@ def sale_history(hist, pid, sd, sp, lf, private):
 GOV = [
     "UNITED STATES", "USA", "U S A", "STATE OF MARYLAND", "STATE OF MD", "STATE HIGHWAY",
     "PRINCE GEORGES COUNTY", "PRINCE GEORGES CO", "PR GEORGES COUNTY", "PRINCE GEORGE COUNTY",
+    "ANNE ARUNDEL COUNTY", "ANNE ARUNDEL CO", "HOWARD COUNTY", "MONTGOMERY COUNTY", "MONTGOMERY CO MD", "CHARLES COUNTY",
+    "COUNTY COMMISSIONERS OF CHARLES", "COMMISSIONERS OF CHARLES COUNTY", "COUNTY COUNCIL", "STATE ROADS",
     "COUNTY COMMISSIONERS", "BOARD OF EDUCATION", "BD OF EDUCATION", "BOARD OF COUNTY",
     "MARYLAND NATIONAL CAPITAL", "MD NATIONAL CAPITAL", "MARYLAND NATL CAPITAL", "M NCPPC", "MNCPPC",
     "WASHINGTON SUBURBAN SANITARY", "WSSC", "CITY OF", "TOWN OF", "MAYOR AND", "MAYOR COUNCIL",
@@ -72,7 +74,7 @@ REL = [
     "BOYS AND GIRLS", "YMCA", "HABITAT FOR HUMANITY", "VOLUNTEER FIRE", "RESCUE SQUAD",
     "IGLESIA", "EVANGELICA", "DIOS", "ASSEMBLY OF GOD", "CRCH", "CHRCH", "CHAPEL", "ASSOCIATION",
     "OWNERS", "COMMUNITY", "MASTER", "ASSOCIA", "ASSN", "COMMNTY", "COMNTY", "HOMEOWNRS", "HOMEOWNR",
-    "HMOWNRS", "HMWNRS", "HMOWRS", "HMONRS", "HMNWNRS", "HMOWNERS", "HMOWNRS", "HMWNRS", "HOMEOWNERS",
+    "HMOWNRS", "HMWNRS", "HMOWRS", "HMONRS", "HOMOWNS", "HOMEOWNS", "MINISTRIES INTERNATIONAL", "HMNWNRS", "HMOWNERS", "HMOWNRS", "HMWNRS", "HOMEOWNERS",
     "HOMEOWNRS", "HMOWRS", "HMOWNR", "HMWNR", "CLUSTER ASSN", "CONDO", "CONDOMINIUMS",
 ]
 INST = [
@@ -96,7 +98,7 @@ CORP = [
     "DEVELOPERS", "ENTERPRISES", "GROUP", "REALTY", "PLC", "LLLP", "PTNSHP", "PTNSH", "BUILDERS", "HOMES",
     "MALL", "SHOP CNTR", "SHOPPING", "SHOP CTR", "SHOPPING CENTER", "TOWN CENTER", "TOWNE CENTRE", "PLAZA LLC", "REGNAL", "REGIONAL",
     "CAPITAL", "FUND", "EQUITIES", "EQUITY", "MANAGEMENT", "APARTMENTS", "ASSOC", "DST", "HOMEBUYER",
-    "RAILROAD", "RAILWAY", "ELECTRIC", "TELEPHONE", "GAS LIGHT", "POWER CO",
+    "RAILROAD", "RAILWAY", "ELECTRIC", "TELEPHONE", "GAS LIGHT", "POWER CO", "PEPCO", "BGE", "VERIZON", "COMCAST",
 ]
 # A personal trust or estate is a person for privacy purposes.
 PERSONAL_TRUST = ["TRUSTEE", "TRUSTEES", "TR", "REVOCABLE", "IRREVOCABLE", "LIVING TRUST",
@@ -194,99 +196,191 @@ def bbox(points, trim=0.0):
     return [xs[lo], ys[lo], xs[hi], ys[hi]]
 
 
+# ---------- sources: each yields normalized records ----------
+# A record: pid, geom, name (None when the source publishes no names), ico, mail_* , site, city, zip,
+# ac, lv, iv, tv, sp, sd, lib, fol, use, use_label, commercial (land use is clearly business),
+# zone, yb, url, ex, exc, imported (ms or None), basis ("record" or "last buyer").
+
+def pg_records():
+    for page in sorted(PAGES.glob("*.geojson")):
+        for f in json.loads(page.read_text())["features"]:
+            p = f["properties"]
+            use = clean(p.get("MNCPPC_USE"))
+            yield {
+                "pid": clean(p.get("PROPERTY_ID")) or f"oid{p['OBJECTID']}", "geom": f.get("geometry"),
+                "name": clean(p.get("OWNER_NAME")), "ico": p.get("ICO_NAME"),
+                "mail_street": p.get("MAIL_STREET"), "mail_zip": p.get("MAIL_ZIP5"), "mail": mail_address(p),
+                "site": site_address(p), "city": clean(p.get("CITY")), "zip": clean(p.get("ZIP5")),
+                "acct": f"{clean(p.get('ASSESS_DIST')) or '??'}-{clean(p.get('ACCOUNT')) or '?'}",
+                "ac": p.get("LAND_AREA_ACRE"), "lv": p.get("FCV_LAND"), "iv": p.get("FCV_IMPS"), "tv": p.get("CURR_ASSESS"),
+                "sp": p.get("SALES_PRICE") or None, "sd": sale_date(p.get("TRANSFER_DATE")),
+                "lib": clean(p.get("LIBER")), "fol": clean(p.get("FOLIO")),
+                "use": use, "use_label": USE_LABEL.get(use),
+                "commercial": p.get("RESIDENTIAL_IND") != "H" and use in COMMERCIAL_USE,
+                "zone": clean(p.get("ZONE_CODE1")), "yb": (clean(p.get("YEAR_BUILT")) or "").lstrip("0") or None,
+                "url": clean(p.get("SDAT_ACCOUNT_URL")),
+                "ex": p.get("EXEMPT_ASSESSMENT") or None, "exc": clean(p.get("EXEMPT_CLASS")),
+                "imported": p.get("IMPRT_DATE"), "basis": "record",
+            }
+
+
+MD_COMMERCIAL = {"Commercial", "Industrial", "Commercial Condominium", "Exempt Commercial"}
+
+
+def raw_features(code):
+    for page in sorted((ROOT / "data" / "raw" / code).glob("*.geojson")):
+        yield from json.loads(page.read_text())["features"]
+
+
+def md_names(code):
+    """ACCTID -> 'OWNER 1; OWNER 2' from a county owner table, or None if the county publishes none."""
+    from sources import SOURCES
+    key = code + "_names"
+    if key not in SOURCES:
+        return None
+    src, out = SOURCES[key], {}
+    for f in raw_features(key):
+        r = f["properties"]
+        n1 = clean(r.get("ASST_FIRST_OWNER") or r.get("OWNNAME1"))
+        n2 = clean(r.get("ASST_SECND_OWNER") or r.get("OWNNAME2"))
+        if n1:
+            out[src["join"](r)] = n1 + (f"; {n2}" if n2 else "")
+    return out
+
+
+def md_records(code):
+    names = md_names(code)
+    for f in raw_features(code):
+        p = f["properties"]
+        acct = clean(p.get("ACCTID"))
+        if not acct or acct == "NO ID":
+            continue
+        use = clean(p.get("DESCLU"))
+        mail = " · ".join(x for x in [
+            " ".join(x for x in [clean(p.get("OWNADD1")), clean(p.get("OWNADD2"))] if x),
+            " ".join(x for x in [", ".join(x for x in [clean(p.get("OWNCITY")), clean(p.get("OWNSTATE"))] if x),
+                                 clean(p.get("OWNERZIP"))] if x)] if x) or None
+        site = ", ".join(x for x in [clean(p.get("ADDRESS")),
+                                     " ".join(x for x in [clean(p.get("CITY")), clean(p.get("ZIPCODE"))] if x)] if x) or None
+        yield {
+            "pid": f"{code}_{acct}", "geom": f.get("geometry"),
+            "name": names.get(acct) if names is not None else None, "names_published": names is not None,
+            "ico": None, "mail_street": p.get("OWNADD1"), "mail_zip": p.get("OWNERZIP"), "mail": mail,
+            "site": site, "city": (clean(p.get("CITY")) or "").title() or None, "zip": clean(p.get("ZIPCODE")),
+            "acct": acct, "ac": p.get("ACRES"),
+            "lv": p.get("NFMLNDVL"), "iv": p.get("NFMIMPVL"), "tv": p.get("NFMTTLVL"),
+            "sp": p.get("CONSIDR1") or None, "sd": sale_date(p.get("TRADATE")),
+            "lib": clean(p.get("DR1LIBER")), "fol": clean(p.get("DR1FOLIO")),
+            "use": clean(p.get("LU")) or use, "use_label": use,
+            "commercial": use in MD_COMMERCIAL and p.get("OOI") != "H",
+            "zone": clean(p.get("ZONING")), "yb": (clean(p.get("YEARBLT")) or "").lstrip("0") or None,
+            "url": clean(p.get("SDATWEBADR")), "ex": None, "exc": clean(p.get("DESCEXCL")),
+            "imported": None, "basis": "record",
+        }
+
+
+REGIONS = [  # code, label, records(), output folder for detail shards
+    ("PG", "Prince George's County, MD", pg_records, SHARDS),
+    ("AA", "Anne Arundel County, MD", lambda: md_records("AA"), ROOT / "data" / "out" / "AA" / "parcels"),
+    ("MO", "Montgomery County, MD", lambda: md_records("MO"), ROOT / "data" / "out" / "MO" / "parcels"),
+    ("CH", "Charles County, MD", lambda: md_records("CH"), ROOT / "data" / "out" / "CH" / "parcels"),
+    ("HO", "Howard County, MD", lambda: md_records("HO"), ROOT / "data" / "out" / "HO" / "parcels"),
+]
+
+
 def main():
+    import sys
+    only = set(sys.argv[1:])   # e.g. "PG AA": build just these regions (owner groups then cover only these)
     BUILD.mkdir(parents=True, exist_ok=True)
-    SHARDS.mkdir(parents=True, exist_ok=True)
-    for old in SHARDS.glob("*.json"):
-        old.unlink()
-
-    shards = {}
-    seen = set()
-    types, n_private, n_dupe, n_nogeom = Counter(), 0, 0, 0
-    max_import = 0
     hist = json.loads(SALES_HISTORY.read_text())["sales"] if SALES_HISTORY.exists() else {}
-    entities = []         # non-private parcels, input to owner grouping
-    addrs = []            # [address, id] for non-private parcels
-    places = {}           # ("zip"|"city", label) -> [points]
+    entities, addrs, places = [], [], {}
+    shards, region_meta = {}, {}
+    max_import = 0
 
-    with open(BUILD / "parcels.geojsonl", "w") as out:
-        for page in sorted(PAGES.glob("*.geojson")):
-            for f in json.loads(page.read_text())["features"]:
-                p = f["properties"]
-                if not f.get("geometry"):
+    for code, label, records, shard_dir in REGIONS:
+        raw_dir = PAGES if code == "PG" else ROOT / "data" / "raw" / code
+        if (only and code not in only) or not any(raw_dir.glob("*.geojson")):
+            continue
+        shard_dir.mkdir(parents=True, exist_ok=True)
+        for old in shard_dir.glob("*.json"):
+            old.unlink()
+        seen = set()
+        types, n_private, n_dupe, n_nogeom = Counter(), 0, 0, 0
+        tiles = BUILD / ("parcels.geojsonl" if code == "PG" else f"{code}.geojsonl")
+        with open(tiles, "w") as out:
+            for r in records():
+                if not r["geom"]:
                     n_nogeom += 1
                     continue
-                pid = clean(p.get("PROPERTY_ID")) or f"oid{p['OBJECTID']}"
-                max_import = max(max_import, p.get("IMPRT_DATE") or 0)
-                use = clean(p.get("MNCPPC_USE"))
-                name = clean(p.get("OWNER_NAME"))
-                t = owner_type(name)
-                residential = p.get("RESIDENTIAL_IND") == "H" or use not in COMMERCIAL_USE
-                private = t == "p" and residential
+                pid, name = r["pid"], r["name"]
+                published = r.get("names_published", True)
+                max_import = max(max_import, r.get("imported") or 0)
+                # No name for this record (county publishes none, or the name table has no match): owner unknown.
+                t = owner_type(name) if published and name else "u"
+                # PRIVACY: a person's parcel is private unless its land use is clearly business. Where the
+                # source publishes no names at all ("u"), owner and mailing address are never shown.
+                private = (t == "p" and not r["commercial"]) or t == "u"
 
-                # Tile feature: keep attributes tiny (HANDOFF.md section 3).
                 props = {"id": pid, "t": t}
-                if private:
+                if private and t != "u":
                     props["pv"] = 1
-                out.write(json.dumps({"type": "Feature", "properties": props, "geometry": f["geometry"]},
+                out.write(json.dumps({"type": "Feature", "properties": props, "geometry": r["geom"]},
                                      separators=(",", ":")) + "\n")
-
-                if pid in seen:  # same account drawn by several shapes: one detail record
+                if pid in seen:
                     n_dupe += 1
                     continue
                 seen.add(pid)
                 types[t] += 1
                 n_private += private
 
-                c = centroid(f["geometry"])
-                if clean(p.get("ZIP5")):
-                    places.setdefault(("zip", clean(p["ZIP5"])), []).append(c)
-                if clean(p.get("CITY")):
-                    places.setdefault(("city", clean(p["CITY"]).title()), []).append(c)
+                c = centroid(r["geom"])
+                if r["zip"]:
+                    places.setdefault(("zip", r["zip"]), []).append(c)
+                if r["city"]:
+                    places.setdefault(("city", r["city"].title()), []).append(c)
 
-                acct = f"{clean(p.get('ASSESS_DIST')) or '??'}-{clean(p.get('ACCOUNT')) or '?'}"
-                lib, fol = clean(p.get("LIBER")), clean(p.get("FOLIO"))
+                lib, fol = r["lib"], r["fol"]
                 d = {
-                    "acct": acct, "t": t,
-                    "a": site_address(p),
-                    "ac": p.get("LAND_AREA_ACRE"),
-                    "lv": p.get("FCV_LAND"), "iv": p.get("FCV_IMPS"), "tv": p.get("CURR_ASSESS"),
-                    "sp": p.get("SALES_PRICE") or None, "sd": sale_date(p.get("TRANSFER_DATE")),
-                    "lu": use, "lul": USE_LABEL.get(use), "z": clean(p.get("ZONE_CODE1")),
-                    "yb": (clean(p.get("YEAR_BUILT")) or "").lstrip("0") or None,
-                    "url": clean(p.get("SDAT_ACCOUNT_URL")),
-                    "ex": p.get("EXEMPT_ASSESSMENT") or None, "exc": clean(p.get("EXEMPT_CLASS")),
-                    "c": c,
+                    "acct": r["acct"], "t": t, "a": r["site"], "ac": r["ac"],
+                    "lv": r["lv"], "iv": r["iv"], "tv": r["tv"], "sp": r["sp"], "sd": r["sd"],
+                    "lu": r["use"], "lul": r["use_label"], "z": r["zone"], "yb": r["yb"], "url": r["url"],
+                    "ex": r["ex"], "exc": r["exc"], "c": c,
                 }
-                if private:
+                if t == "u":
+                    d["nn"] = 1
+                elif private:
                     d["pv"] = 1
                 else:
-                    d.update({
-                        "o": name, "co": clean(p.get("ICO_NAME")), "ma": mail_address(p),
-                        "lf": f"{lib}/{fol}" if lib and fol and lib.strip("0") else None,
-                    })
+                    d.update({"o": name, "co": clean(r["ico"]), "ma": r["mail"],
+                              "lf": f"{lib}/{fol}" if lib and fol and lib.strip("0") else None})
+                    if r["basis"] != "record":
+                        d["ob"] = r["basis"]
                     if name and name != "UNKNOWN":
                         entities.append({
                             "id": pid, "name": name, "t": t, "c": c, "mail": d["ma"],
-                            "akey": address_key(p.get("MAIL_STREET"), p.get("ICO_NAME"), p.get("MAIL_ZIP5")),
-                            "coe": careof_entity(p.get("ICO_NAME")),
-                            "ac": p.get("LAND_AREA_ACRE"), "tv": p.get("CURR_ASSESS"),
+                            "akey": address_key(r["mail_street"], r["ico"], r["mail_zip"]),
+                            "coe": careof_entity(r["ico"]), "ac": r["ac"], "tv": r["tv"],
                         })
-                    if d.get("a"):
-                        addrs.append([d["a"], pid])
+                if d.get("a") and (not private or (t == "u" and r["commercial"])):
+                    addrs.append([d["a"], pid])
                 lf_raw = f"{lib.lstrip('0')}/{fol.lstrip('0') or '0'}" if lib and fol and lib.strip("0") else None
                 sh = sale_history(hist, pid, d.get("sd"), d.get("sp"), lf_raw, private)
                 if len(sh) > 1 or (sh and sh[0]["d"] != d.get("sd")):
                     d["sh"] = sh
                 d = {k: v for k, v in d.items() if v not in (None, "", 0) or k in ("lv", "iv", "tv")}
-                shards.setdefault(pid[-3:].rjust(3, "0"), {})[pid] = d
+                shards.setdefault((code, pid[-3:].rjust(3, "0")), {})[pid] = d
+        region_meta[code] = {"name": label, "parcels": len(seen), "private": n_private, "by_type": dict(types)}
+        print(f"{code}: {len(seen):,} parcels, {n_private:,} private, types {dict(types)}, "
+              f"dupes {n_dupe}, no geometry {n_nogeom}", flush=True)
 
     pid_gid, groups = build_groups(entities)
     for pid, gid in pid_gid.items():
-        shards[pid[-3:].rjust(3, "0")][pid]["g"] = gid
+        code = pid.split("_")[0] if "_" in pid else "PG"
+        shards[(code, pid[-3:].rjust(3, "0"))][pid]["g"] = gid
 
-    for key, recs in shards.items():
-        (SHARDS / f"{key}.json").write_text(json.dumps(recs, separators=(",", ":")))
+    dirs = {code: shard_dir for code, _, _, shard_dir in REGIONS}
+    for (code, key), recs in shards.items():
+        (dirs[code] / f"{key}.json").write_text(json.dumps(recs, separators=(",", ":")))
 
     search = {
         # index in this list == the "g" id stored on each parcel detail record
@@ -305,19 +399,20 @@ def main():
     print(f"search: {len(search['groups'])} owner groups, {len(addrs)} addresses, {len(search['places'])} places")
 
     as_of = datetime.fromtimestamp(max_import / 1000, tz=timezone.utc) if max_import else None
+    pg = region_meta.get("PG", {})
     meta = {
         "as_of": as_of.strftime("%Y-%m-%d") if as_of else None,
         "as_of_label": as_of.strftime("%b %Y") if as_of else None,
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "parcels": len(seen), "private": n_private, "by_type": dict(types),
+        "parcels": pg.get("parcels"), "private": pg.get("private"), "by_type": pg.get("by_type"),
+        "regions": region_meta,
         "source": {
             "label": "Prince George's County DPIE, Property Flattened (parcel shapes + SDAT)",
             "url": "https://gis.princegeorgescountymd.gov/arcgis/rest/services/DPIE/SERVICES4PLS/MapServer/19",
         },
     }
     (WEB_DATA / "meta.json").write_text(json.dumps(meta, indent=2))
-    print(json.dumps(meta, indent=2))
-    print(f"shards: {len(shards)}  duplicate shapes: {n_dupe}  no geometry: {n_nogeom}")
+    print(json.dumps(region_meta, indent=2))
 
 
 if __name__ == "__main__":

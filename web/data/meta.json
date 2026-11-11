@@ -3,13 +3,71 @@
   "as_of_label": "Nov 2026",
   "built": "2026-11-11",
   "parcels": 314490,
-  "private": 260878,
+  "private": 260873,
   "by_type": {
-    "c": 34546,
-    "p": 263438,
-    "g": 9317,
+    "c": 34547,
+    "p": 263400,
+    "g": 9322,
     "r": 6862,
-    "i": 327
+    "i": 327,
+    "u": 32
+  },
+  "regions": {
+    "PG": {
+      "name": "Prince George's County, MD",
+      "parcels": 314490,
+      "private": 260873,
+      "by_type": {
+        "c": 34547,
+        "p": 263400,
+        "g": 9322,
+        "r": 6862,
+        "i": 327,
+        "u": 32
+      }
+    },
+    "AA": {
+      "name": "Anne Arundel County, MD",
+      "parcels": 204768,
+      "private": 184268,
+      "by_type": {
+        "u": 11803,
+        "p": 173826,
+        "c": 12462,
+        "g": 3119,
+        "r": 3420,
+        "i": 138
+      }
+    },
+    "MO": {
+      "name": "Montgomery County, MD",
+      "parcels": 281250,
+      "private": 281250,
+      "by_type": {
+        "u": 281250
+      }
+    },
+    "CH": {
+      "name": "Charles County, MD",
+      "parcels": 72034,
+      "private": 61688,
+      "by_type": {
+        "u": 695,
+        "c": 6034,
+        "p": 61745,
+        "g": 662,
+        "i": 57,
+        "r": 2841
+      }
+    },
+    "HO": {
+      "name": "Howard County, MD",
+      "parcels": 100060,
+      "private": 100060,
+      "by_type": {
+        "u": 100060
+      }
+    }
   },
   "source": {
     "label": "Prince George's County DPIE, Property Flattened (parcel shapes + SDAT)",

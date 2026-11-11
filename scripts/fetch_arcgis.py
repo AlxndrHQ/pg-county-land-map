@@ -22,6 +22,7 @@ DELAY_S = 1.0
 
 def fetch(code, fresh=False, limit_pages=0):
     src = SOURCES[code]
+    oid = src.get("oid", "OBJECTID")
     out = ROOT / "data" / "raw" / code
     out.mkdir(parents=True, exist_ok=True)
     if fresh:
@@ -32,23 +33,24 @@ def fetch(code, fresh=False, limit_pages=0):
     for p in sorted(out.glob("*.geojson")):
         feats = json.loads(p.read_text())["features"]
         if feats:
-            last_oid = max(last_oid, max(f["properties"]["OBJECTID"] for f in feats))
+            last_oid = max(last_oid, max(f["properties"][oid] for f in feats))
         n += len(feats)
         page_no += 1
     print(f"{code}: server reports {total:,}; cached {n:,} in {page_no} pages", flush=True)
     while True:
         d = get(src["layer"] + "/query", {
-            "where": f"({src['where']}) AND OBJECTID > {last_oid}",
-            "orderByFields": "OBJECTID ASC",
+            "where": f"({src['where']}) AND {oid} > {last_oid}",
+            "orderByFields": f"{oid} ASC",
             "outFields": ",".join(src["fields"]),
             "outSR": "4326", "geometryPrecision": "6",
+            "returnGeometry": "true" if src.get("geometry", True) else "false",
             "resultRecordCount": src["page"], "f": "geojson",
         })
         feats = d.get("features", [])
         if not feats:
             break
         (out / f"{page_no:05d}.geojson").write_text(json.dumps(d, separators=(",", ":")))
-        last_oid = max(f["properties"]["OBJECTID"] for f in feats)
+        last_oid = max(f["properties"][oid] for f in feats)
         n += len(feats)
         page_no += 1
         if page_no % 20 == 0:

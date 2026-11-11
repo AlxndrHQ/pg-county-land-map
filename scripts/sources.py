@@ -21,4 +21,17 @@ SOURCES = {
            "where": "JURSCODE='MONT'", "fields": MD_FIELDS, "page": 1000},
     "CH": {"name": "Charles County, MD", "state": "MD", "layer": MD_IMAP,
            "where": "JURSCODE='CHAR'", "fields": MD_FIELDS, "page": 1000},
+
+    "HO": {"name": "Howard County, MD", "state": "MD", "layer": MD_IMAP,
+           "where": "JURSCODE='HOWA'", "fields": MD_FIELDS, "page": 1000},
+
+    # Owner names (MD iMAP has none). Attribute-only tables joined to MD iMAP on ACCTID.
+    "AA_names": {"name": "Anne Arundel County Planning and Zoning (owner names)", "state": "MD",
+                 "layer": "https://gis.aacounty.org/arcgis/rest/services/OpenData/Planning_OpenData/MapServer/34",
+                 "where": "1=1", "fields": ["OBJECTID", "ASST_ACCOUNT_NO", "ASST_FIRST_OWNER", "ASST_SECND_OWNER"],
+                 "page": 2000, "geometry": False, "join": lambda r: "020" + (r.get("ASST_ACCOUNT_NO") or "")},
+    "CH_names": {"name": "Charles County tax parcels (owner names)", "state": "MD",
+                 "layer": "https://services7.arcgis.com/3BMWkdyrt45RNCrq/arcgis/rest/services/Tax_Parcels_(View)/FeatureServer/0",
+                 "where": "1=1", "fields": ["FID", "ACCTID", "OWNNAME1", "OWNNAME2"], "oid": "FID",
+                 "page": 2000, "geometry": False, "join": lambda r: r.get("ACCTID") or ""},
 }

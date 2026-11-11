@@ -4,6 +4,25 @@
 
   const BASE_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
   const PARCELS_URL = new URL("data/parcels.pmtiles", location.href).href;
+  // Other jurisdictions live in storage-only data repos on the same GitHub Pages host (one map, many data sites).
+  // Their parcel ids carry a prefix ("AA_020100000002454"); PG ids stay bare so saved projects keep working.
+  const LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  const REGIONS = {
+    AA: { name: "Anne Arundel County, MD", repo: "rem-data-md", county: "Anne Arundel",
+          src: "Owner names from Anne Arundel County Planning and Zoning; values, land use and sales from SDAT via MD iMAP" },
+    MO: { name: "Montgomery County, MD", repo: "rem-data-md", county: "Montgomery", noNames: true,
+          src: "Values, land use and sales from SDAT via MD iMAP. Montgomery County publishes no owner names" },
+    CH: { name: "Charles County, MD", repo: "rem-data-md", county: "Charles",
+          src: "Owner names from Charles County's tax parcel layer; values, land use and sales from SDAT via MD iMAP" },
+    HO: { name: "Howard County, MD", repo: "rem-data-md", county: "Howard", noNames: true,
+          src: "Values, land use and sales from SDAT via MD iMAP. Howard County publishes no owner names in machine-readable form" },
+  };
+  const regionBase = (code) => LOCAL ? new URL(`data/r/${code}/`, location.href).href
+    : `https://alxndrhq.github.io/${REGIONS[code].repo}/${code}/`;
+  const regionOf = (id) => (/^([A-Z]{2})_/.exec(id || "") || [])[1] || "PG";
+  const SRC = [["parcels", ""], ...Object.keys(REGIONS).map((c) => ["parcels-" + c, "-" + c])];
+  const idsOf = (base) => SRC.map(([, sfx]) => base + sfx);
+  const eachLayer = (base, fn) => { if (map) for (const id of idsOf(base)) if (map.getLayer(id)) fn(id); };
   const PARCEL_MINZOOM = 12;
   const PG_CENTER = [-76.85, 38.83];
 
@@ -26,7 +45,7 @@
       tag: { gold: "#C9A875", clay: "#E0907A", blue: "#86A8C4", violet: "#A99BD3", green: "#7FB89B", teal: "#7CC3C8" },
     },
   };
-  const TYPE_LABEL = { c: "Corporate / LLC", i: "Institutional", g: "Government", r: "Religious / nonprofit", p: "Individual" };
+  const TYPE_LABEL = { c: "Corporate / LLC", i: "Institutional", g: "Government", r: "Religious / nonprofit", p: "Individual", u: "Owner not published" };
 
   // ---------- theme ----------
   const root = document.documentElement;
@@ -76,22 +95,22 @@
     return { ...base, sources, layers };
   }
 
+  const typeColorExpr = (P) => ["match", ["get", "t"], "c", P.t.c, "i", P.t.i, "g", P.t.g, "r", P.t.r, P.t.p];
   function parcelLayers(P) {
-    const typeColor = ["match", ["get", "t"], "c", P.t.c, "i", P.t.i, "g", P.t.g, "r", P.t.r, P.t.p];
+    const typeColor = typeColorExpr(P);
     const tc = tagColorExpr(P);
+    const per = (base, def) => SRC.map(([src, sfx]) => ({ ...def, id: base + sfx, source: src, "source-layer": "parcels" }));
     return [
-      { id: "parcel-hit", type: "fill", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
-        paint: { "fill-color": P.bg, "fill-opacity": 0 } },
-      { id: "parcel-line", type: "line", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
+      ...per("parcel-hit", { type: "fill", minzoom: PARCEL_MINZOOM, paint: { "fill-color": P.bg, "fill-opacity": 0 } }),
+      ...per("parcel-line", { type: "line", minzoom: PARCEL_MINZOOM,
         paint: {
           "line-color": muteOthers ? P.edge : typeColor,
           "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.3, 15, 0.7, 18, 1.2],
           "line-opacity": ["case", ["==", ["get", "t"], "p"], 0.9, 0.95],
-        }, filter: typeFilter() },
-      { id: "tag-fill", type: "fill", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
-        filter: tagFilter(), paint: { "fill-color": tc, "fill-opacity": 0.16 } },
-      { id: "tag-line", type: "line", source: "parcels", "source-layer": "parcels", minzoom: PARCEL_MINZOOM,
-        filter: tagFilter(), paint: { "line-color": tc, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.9, 16, 1.6] } },
+        }, filter: typeFilter() }),
+      ...per("tag-fill", { type: "fill", minzoom: PARCEL_MINZOOM, filter: tagFilter(), paint: { "fill-color": tc, "fill-opacity": 0.16 } }),
+      ...per("tag-line", { type: "line", minzoom: PARCEL_MINZOOM, filter: tagFilter(),
+        paint: { "line-color": tc, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.9, 16, 1.6] } }),
       { id: "tag-dots", type: "circle", source: "tagdots", maxzoom: 13,
         paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 1.8, 12, 3.2], "circle-color": ["get", "col"],
                  "circle-opacity": 0.9, "circle-stroke-color": P.bg, "circle-stroke-width": 0.6 } },
@@ -100,11 +119,9 @@
       { id: "sel-dots", type: "circle", source: "seldots", maxzoom: 14, filter: ["==", ["get", "k"], "pt"],
         paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2.2, 13, 4], "circle-color": P.accent,
                  "circle-stroke-color": P.bg, "circle-stroke-width": 1 } },
-      { id: "parcel-sel-fill", type: "fill", source: "parcels", "source-layer": "parcels",
-        filter: selFilter(), paint: { "fill-color": P.accentSoft } },
-      { id: "parcel-sel-line", type: "line", source: "parcels", "source-layer": "parcels",
-        filter: selFilter(),
-        paint: { "line-color": P.accent, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 17, 2] } },
+      ...per("parcel-sel-fill", { type: "fill", filter: selFilter(), paint: { "fill-color": P.accentSoft } }),
+      ...per("parcel-sel-line", { type: "line", filter: selFilter(),
+        paint: { "line-color": P.accent, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 17, 2] } }),
       { id: "hub-dot", type: "circle", source: "seldots", filter: ["==", ["get", "k"], "hub"],
         paint: { "circle-radius": 5, "circle-color": P.bg, "circle-stroke-color": P.accent, "circle-stroke-width": 1.5 } },
       { id: "hub-label", type: "symbol", source: "seldots", filter: ["==", ["get", "k"], "hub"],
@@ -121,6 +138,8 @@
       type: "vector", url: "pmtiles://" + PARCELS_URL,
       attribution: "Parcel data: MD iMAP, MDP, SDAT; PG County DPIE",
     };
+    for (const code of Object.keys(REGIONS))
+      s.sources["parcels-" + code] = { type: "vector", url: "pmtiles://" + regionBase(code) + "parcels.pmtiles" };
     s.sources.seldots = { type: "geojson", data: dotsData() };
     s.sources.tagdots = { type: "geojson", data: tagDotsData(P) };
     // Parcels sit above roads and below labels.
@@ -146,10 +165,12 @@
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.on("zoom", updateHint);
     updateHint();
-    map.on("mousemove", "parcel-hit", () => (map.getCanvas().style.cursor = "pointer"));
-    map.on("mouseleave", "parcel-hit", () => (map.getCanvas().style.cursor = ""));
+    for (const id of idsOf("parcel-hit")) {
+      map.on("mousemove", id, () => (map.getCanvas().style.cursor = "pointer"));
+      map.on("mouseleave", id, () => (map.getCanvas().style.cursor = ""));
+    }
     map.on("click", (e) => {
-      const f = map.queryRenderedFeatures(e.point, { layers: ["parcel-hit"] })[0];
+      const f = map.queryRenderedFeatures(e.point, { layers: idsOf("parcel-hit").filter((id) => map.getLayer(id)) })[0];
       if (f) select(f.properties.id);
       else closeDrawer();
     });
@@ -178,9 +199,8 @@
     selPts = pts || [];
     selHub = hub || null;
     if (map && map.getSource("seldots")) map.getSource("seldots").setData(dotsData());
-    if (map && map.getLayer("parcel-sel-fill")) {
-      map.setFilter("parcel-sel-fill", selFilter()); map.setFilter("parcel-sel-line", selFilter());
-    }
+    eachLayer("parcel-sel-fill", (id) => map.setFilter(id, selFilter()));
+    eachLayer("parcel-sel-line", (id) => map.setFilter(id, selFilter()));
   }
 
   themeBtn.addEventListener("click", () => {
@@ -199,9 +219,11 @@
   // ---------- parcel details (sharded JSON, loaded on click) ----------
   const shardCache = new Map();
   function loadShard(id) {
-    const key = id.slice(-3).padStart(3, "0");
+    const region = regionOf(id);
+    const key = (region === "PG" ? "" : region + "/") + id.slice(-3).padStart(3, "0");
+    const url = region === "PG" ? `data/parcels/${key}.json` : regionBase(region) + `parcels/${key.split("/")[1]}.json`;
     if (!shardCache.has(key)) {
-      shardCache.set(key, fetch(`data/parcels/${key}.json`).then((r) => {
+      shardCache.set(key, fetch(url).then((r) => {
         if (!r.ok) throw new Error(`shard ${key}: HTTP ${r.status}`);
         return r.json();
       }).catch((e) => { shardCache.delete(key); throw e; }));
@@ -221,7 +243,7 @@
     loadShard(id).then((d) => {
       if (token !== reqToken) return;
       if (!d) { setSelected([]); body.innerHTML = `<div class="lbl">No parcel with account ${esc(opts.label || id)}</div>`; return; }
-      body.innerHTML = (opts.back ? opts.back : "") + render(d);
+      body.innerHTML = (opts.back ? opts.back : "") + render({ ...d, id });
       wireBack();
       fillGroupRow(d);
       addProjectControl(id, d);
@@ -269,9 +291,14 @@
 
   function render(d) {
     const P = PAL[theme()];
-    const typeDot = `<span class="lbl type" style="--c:${d.t === "p" ? P.edgeStrong : P.t[d.t]}"><i></i>${esc(TYPE_LABEL[d.t] || "Owner")}</span>`;
-    const title = d.pv ? "Individually owned" : esc(d.o || "Owner not listed");
-    const privacyNote = d.pv
+    const typeDot = `<span class="lbl type" style="--c:${d.t === "p" || d.t === "u" ? P.edgeStrong : P.t[d.t]}"><i></i>${esc(TYPE_LABEL[d.t] || "Owner")}</span>`;
+    const reg = REGIONS[regionOf(d.id)];
+    const title = d.nn ? "Owner not published" : d.pv ? "Individually owned" : esc(d.o || "Owner not listed");
+    const privacyNote = d.nn
+      ? (reg && reg.noNames
+        ? `<p class="note">${esc(reg.county)} County doesn't publish owner names in its open data, so this map doesn't show the owner or mailing address. The owner of record is on SDAT.</p>`
+        : `<p class="note">This parcel has no match in the county's published owner list, so this map doesn't show an owner or mailing address. The owner of record is on SDAT.</p>`)
+      : d.pv
       ? `<p class="note">This home appears to be owned by an individual. To protect their privacy, this map doesn't show the owner's name or mailing address. The record is public on SDAT.</p>`
       : "";
     const sale = d.sd || d.sp ? `${usd(d.sp)}<span class="sub">${esc(date(d.sd) || "date not recorded")}</span>` : null;
@@ -284,7 +311,7 @@
       <div id="tag-slot"></div>
       ${privacyNote}
       <dl>
-        ${d.pv ? "" : row("Mailing", [d.co, d.ma].filter(Boolean).map(esc).join("<br>") || "—")}
+        ${d.pv || d.nn ? "" : row("Mailing", [d.co, d.ma].filter(Boolean).map(esc).join("<br>") || "—")}
         ${d.g != null ? `<div id="grp-slot" style="display:contents"></div>` : ""}
         ${row("Account", `<span class="num">${esc(d.acct)}</span>`)}
         ${row("Area", `<span class="num">${acres(d.ac)}</span>`)}
@@ -300,13 +327,13 @@
       </dl>
       <div id="pnote-slot"></div>
       <div class="src">
-        Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
-        Sales combine SDAT's last sale with Maryland's 12-month Property Sales layer, collected since Nov 2026.
+        ${reg ? esc(reg.src) + "." : `Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
+        Sales combine SDAT's last sale with Maryland's 12-month Property Sales layer, collected since Nov 2026.`}
         <div class="links">
           ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">SDAT record ↗</a><span class="dim"> needs a free SDAT login</span><br>` : ""}
-          <a href="https://sdat.dat.maryland.gov/RealProperty/Pages/default.aspx" target="_blank" rel="noopener">SDAT public search ↗</a><span class="dim"> Prince George's · district ${esc(d.acct.split("-")[0])} · account ${esc(d.acct.split("-")[1] || "")}. Shows the last 3 transfers.</span><br>
-          ${!d.pv && d.lf ? `<a href="https://mdlandrec.net" target="_blank" rel="noopener">Maryland Land Records ↗</a><span class="dim"> deed liber ${esc(d.lf.split("/")[0])}, folio ${esc(d.lf.split("/")[1])}. Full chain of title.</span><br>` : ""}
-          ${!d.pv && d.o && d.t !== "g" ? entityLinks(d.o) : ""}
+          <a href="https://sdat.dat.maryland.gov/RealProperty/Pages/default.aspx" target="_blank" rel="noopener">SDAT public search ↗</a><span class="dim"> ${reg ? `${esc(reg.county)} · account ${esc(d.acct)}` : `Prince George's · district ${esc(d.acct.split("-")[0])} · account ${esc(d.acct.split("-")[1] || "")}`}. Shows the last 3 transfers.</span><br>
+          ${!d.pv && !d.nn && d.lf ? `<a href="https://mdlandrec.net" target="_blank" rel="noopener">Maryland Land Records ↗</a><span class="dim"> deed liber ${esc(d.lf.split("/")[0])}, folio ${esc(d.lf.split("/")[1])}. Full chain of title.</span><br>` : ""}
+          ${!d.pv && !d.nn && d.o && d.t !== "g" ? entityLinks(d.o) : ""}
         </div>
       </div>`;
   }
@@ -890,12 +917,15 @@
   function applyTags() {
     muteOthers = view.mute && tags.some((t) => t.on);
     if (!map || !map.getLayer("tag-line")) return;
+    const P2 = PAL[theme()];
     const P = PAL[theme()], tc = tagColorExpr(P), tf = tagFilter();
-    map.setFilter("tag-fill", tf); map.setFilter("tag-line", tf);
-    map.setPaintProperty("tag-fill", "fill-color", tc); map.setPaintProperty("tag-line", "line-color", tc);
+    eachLayer("tag-fill", (id) => { map.setFilter(id, tf); map.setPaintProperty(id, "fill-color", tc); });
+    eachLayer("tag-line", (id) => { map.setFilter(id, tf); map.setPaintProperty(id, "line-color", tc); });
     map.getSource("tagdots").setData(tagDotsData(P));
-    map.setFilter("parcel-line", typeFilter());
-    map.setPaintProperty("parcel-line", "line-color", muteOthers ? P.edge : parcelLayers(P)[1].paint["line-color"]);
+    eachLayer("parcel-line", (id) => {
+      map.setFilter(id, typeFilter());
+      map.setPaintProperty(id, "line-color", muteOthers ? P2.edge : typeColorExpr(P2));
+    });
   }
 
   // What a tag applied from this parcel covers: the owner's group, or just this parcel.
@@ -1001,7 +1031,7 @@
   const legend = document.getElementById("legend");
   function renderLegend() {
     const P = PAL[theme()];
-    const types = [["c", "--t-c"], ["i", "--t-i"], ["g", "--t-g"], ["r", "--t-r"], ["p", "--edge-strong"]];
+    const types = [["c", "--t-c"], ["i", "--t-i"], ["g", "--t-g"], ["r", "--t-r"], ["p", "--edge-strong"], ["u", "--edge"]];
     const counts = new Map(tags.map((t) => [t.id, tagIds(t).length]));
     legend.innerHTML = `
       <span class="lbl">Owner</span>
@@ -1179,7 +1209,7 @@
   fetch("data/meta.json").then((r) => r.json()).then((m) => {
     asOfLabel = m.as_of_label;
     if (asOfLabel) document.getElementById("asof").textContent =
-      `Parcel data: MD iMAP, MDP, SDAT · PG County DPIE · Ownership as of SDAT, ${asOfLabel}`;
+      `Parcel data: MD iMAP, MDP, SDAT · PG County DPIE · Anne Arundel and Charles County GIS · Ownership as of SDAT, ${asOfLabel}`;
   }).catch(() => {});
 
   const limits = document.getElementById("limits");

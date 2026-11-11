@@ -5,3 +5,5 @@ data/build/
 __pycache__/
 *.pyc
 CLAUDE.local.md
+web/data/r
+data/out/
