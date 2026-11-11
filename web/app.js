@@ -213,6 +213,7 @@
       wireBack();
       fillGroupRow(d);
       addProjectControl(id, d);
+      addParcelNotes(id, d);
       if (opts.fly && d.c && map) map.flyTo({ center: d.c, zoom: Math.max(map.getZoom(), 16.5), padding: drawerPad() });
     }).catch((e) => {
       if (token === reqToken) body.innerHTML = `<div class="lbl">Couldn't load parcel details</div><p class="note">${esc(e.message)}</p>`;
@@ -283,6 +284,7 @@
         ${row("Zoning", d.z && `<span class="num">${esc(d.z)}</span>`)}
         ${row("Built", d.yb && `<span class="num">${esc(d.yb)}</span>`)}
       </dl>
+      <div id="pnote-slot"></div>
       <div class="src">
         Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
         Sales combine SDAT's last sale with Maryland's 12-month Property Sales layer, collected since Nov 2026.
@@ -575,6 +577,61 @@
     paint();
   }
 
+  // Notes and questions written from the parcel drawer. Each note belongs to a project (it is
+  // sent under that project's name) and remembers the parcel it is about.
+  const noteWhen = (n) => new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const noteStatus = (n) => (n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only");
+  function addParcelNotes(id, d) {
+    const slot = body.querySelector("#pnote-slot");
+    if (!slot) return;
+    const label = d.a || "Account " + d.acct;
+    const paint = (keep = "") => {
+      if (!document.contains(slot)) return;
+      const inN = projects.filter((p) => p.ids.includes(id));
+      const rest = projects.filter((p) => !p.ids.includes(id));
+      const notes = projects.flatMap((p) => (p.log || []).filter((n) => n.pid === id).map((n) => ({ ...n, pname: p.name })))
+        .sort((a, b) => (a.at < b.at ? 1 : -1));
+      slot.innerHTML = `
+        <div class="lbl sec">Notes and questions</div>
+        <form class="noteform pnote">
+          <textarea name="t" rows="2" placeholder="Write a note or a question about this parcel…" aria-label="New note"></textarea>
+          <div class="noterow">
+            <select name="k" aria-label="Type"><option value="note">Note</option><option value="question">Question</option></select>
+            <select name="p" aria-label="Project">
+              ${inN.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
+              ${rest.map((p) => `<option value="${p.id}">${esc(p.name)} (adds parcel)</option>`).join("")}
+              <option value="__new">New project</option>
+            </select>
+            <button class="linkish" type="submit">Add</button>
+          </div>
+          <span class="syncstat">${syncCfg.url ? "Sends to your Project Notes doc" : `Saved in this browser · <button type="button" class="linkish" data-sync>Connect Google Doc</button>`}</span>
+        </form>
+        ${notes.length ? `<ul class="nlog">${notes.map((n) => `
+          <li><span class="sub">${esc(noteWhen(n))} · ${n.kind === "question" ? "Question" : "Note"} · ${esc(n.pname)} · ${noteStatus(n)}</span>
+            <span class="ntext">${esc(n.text)}</span></li>`).join("")}</ul>` : ""}`;
+      const f = slot.querySelector("form");
+      f.t.value = keep;
+      const sl = f.querySelector("[data-sync]"); if (sl) sl.addEventListener("click", showSyncSettings);
+      const add = () => {
+        const text = f.t.value.trim(); if (!text) return;
+        let p = projects.find((x) => x.id === f.p.value);
+        if (!p) {
+          const n = prompt("Name the new project", label); if (n === null) return;
+          p = createProject(n || label, [id]);
+        }
+        if (!p.ids.includes(id)) p.ids = [...p.ids, id];
+        p.log = p.log || [];
+        p.log.push({ id: newId(), at: new Date().toISOString(), kind: f.k.value, text, sent: false, pid: id, pl: label });
+        touch(p); paint(); addProjectControl(id, d); syncPending();
+      };
+      f.addEventListener("submit", (e) => { e.preventDefault(); add(); });
+      f.t.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); add(); } });
+    };
+    paint();
+    refreshNotes = () => paint(slot.querySelector("textarea") ? slot.querySelector("textarea").value : "");
+  }
+  let refreshNotes = null;
+
   // project view
   function loadMany(ids) { return Promise.all(ids.map((id) => loadShard(id).then((d) => [id, d]).catch(() => [id, null]))); }
   function showProject(pid) {
@@ -611,7 +668,7 @@
           <li><span class="num">${esc(date(r.d))}</span> <span class="num">${r.p ? usd(r.p) : "no price"}</span>
           <span class="sub">${esc(r.where)}${r.who ? " · " + esc(r.who) : ""}${r.deed ? " · deed " + esc(r.deed) : ""}</span></li>`).join("")}</ul>` : ""}
         <div class="lbl sec">Notes and questions</div>
-        <form class="noteform">
+        <form class="noteform" data-p="${p.id}">
           <textarea name="t" rows="3" placeholder="Write a note or a question about this project…" aria-label="New note"></textarea>
           <div class="noterow">
             <select name="k" aria-label="Type"><option value="note">Note</option><option value="question">Question</option></select>
@@ -624,8 +681,7 @@
         ${syncCfg.url ? "" : `<div class="synccta"><span>Send these notes to your Google Doc automatically.</span>
           <button type="button" class="linkish" data-sync>Set it up (one time, about 3 min) →</button></div>`}
         <ul class="nlog">${(p.log || []).slice().reverse().map((n) => `
-          <li><span class="sub">${esc(new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}
-            · ${n.kind === "question" ? "Question" : "Note"} · ${n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only"}</span>
+          <li><span class="sub">${esc(noteWhen(n))} · ${n.kind === "question" ? "Question" : "Note"}${n.pl ? " · " + esc(n.pl) : ""} · ${noteStatus(n)}</span>
             <span class="ntext">${esc(n.text)}</span></li>`).join("")}</ul>
         <div class="lbl sec">Research doc</div>
         <div class="pdoc"><input class="pdocin" placeholder="Paste a Google Doc link" value="${esc(doc)}"> ${docLink}</div>
@@ -660,6 +716,7 @@
         projects = projects.filter((x) => x.id !== p.id); saveProjects(); closeDrawer();
       });
       lastProject = p.id;
+      refreshNotes = () => { if (body.querySelector(`.noteform[data-p="${p.id}"]`)) showProject(p.id); };
       if (map && pts.length) {
         const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
         map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: drawerPad(), maxZoom: 16.5 });
@@ -680,15 +737,15 @@
   const validUrl = (u) => /^https:\/\/script\.google(usercontent)?\.com\//.test(u || "");
   const mapBase = location.origin + location.pathname;
 
-  async function parcelRefs(p) {
-    const rows = await loadMany(p.ids.slice(0, 50));
+  async function parcelRefs(ids) {
+    const rows = await loadMany(ids.slice(0, 50));
     return rows.filter(([, d]) => d).map(([, d]) => ({
       label: [d.a || "No site address", d.pv ? "individually owned" : d.o, "acct " + d.acct].filter(Boolean).join(" · "),
       url: d.c ? `${mapBase}#map=17/${d.c[1]}/${d.c[0]}` : mapBase,
     }));
   }
   async function sendNote(p, n) {
-    const payload = { key: syncCfg.key, project: p.name, kind: n.kind, text: n.text, at: n.at, parcels: await parcelRefs(p) };
+    const payload = { key: syncCfg.key, project: p.name, kind: n.kind, text: n.text, at: n.at, parcels: await parcelRefs(n.pid ? [n.pid] : p.ids) };
     // text/plain body = a "simple" cross-origin request, which Apps Script web apps accept without a preflight
     const r = await fetch(syncCfg.url, { method: "POST", body: JSON.stringify(payload) });
     const j = await r.json();
@@ -708,7 +765,7 @@
     } finally { syncing = false; }
     if (failed) toast(`A note couldn't reach Google Docs (${failed.message}). It stays saved here and will retry.`);
     else if (sent) toast(sent === 1 ? "Note sent to Google Docs." : `${sent} notes sent to Google Docs.`);
-    if (sent && lastProject && !drawer.hidden && body.querySelector(".nlog")) showProject(lastProject);
+    if (sent && refreshNotes && !drawer.hidden) refreshNotes();
   }
   function toast(msg) {
     let t = document.getElementById("toast");
