@@ -5,6 +5,8 @@ Inputs:  data/raw/pages/*.geojson          (from fetch_parcels.py)
 Outputs: data/build/parcels.geojsonl        one feature per line, tiny props, for tippecanoe
          web/data/parcels/<NNN>.json        detail records, sharded by last 3 digits of the id
          web/data/meta.json                 data date, counts, source attribution
+         web/data/search.json               search index: entity owners, entity addresses, ZIPs, cities
+                                            (private parcels are never in it, only in ZIP/city counts)
 
 Owner-type codes used in tiles and details (colors in web/style.css):
   c  corporate / LLC / partnership
@@ -159,6 +161,21 @@ def sale_date(s):
     return None
 
 
+def centroid(geom):
+    """Vertex average of the first outer ring: cheap, good enough to fly to a parcel."""
+    ring = geom["coordinates"][0] if geom["type"] == "Polygon" else geom["coordinates"][0][0]
+    xs, ys = [c[0] for c in ring], [c[1] for c in ring]
+    return [round(sum(xs) / len(xs), 5), round(sum(ys) / len(ys), 5)]
+
+
+def bbox(points, trim=0.0):
+    """Bounding box of points; trim drops that fraction of outliers at each edge."""
+    xs, ys = sorted(p[0] for p in points), sorted(p[1] for p in points)
+    k = int(len(xs) * trim)
+    lo, hi = k, len(xs) - 1 - k
+    return [xs[lo], ys[lo], xs[hi], ys[hi]]
+
+
 def main():
     BUILD.mkdir(parents=True, exist_ok=True)
     SHARDS.mkdir(parents=True, exist_ok=True)
@@ -169,6 +186,9 @@ def main():
     seen = set()
     types, n_private, n_dupe, n_nogeom = Counter(), 0, 0, 0
     max_import = 0
+    owners = {}           # owner name -> {t, ids, ac, pts}   (entity / non-private only)
+    addrs = []            # [address, id] for non-private parcels
+    places = {}           # ("zip"|"city", label) -> [points]
 
     with open(BUILD / "parcels.geojsonl", "w") as out:
         for page in sorted(PAGES.glob("*.geojson")):
@@ -199,6 +219,12 @@ def main():
                 types[t] += 1
                 n_private += private
 
+                c = centroid(f["geometry"])
+                if clean(p.get("ZIP5")):
+                    places.setdefault(("zip", clean(p["ZIP5"])), []).append(c)
+                if clean(p.get("CITY")):
+                    places.setdefault(("city", clean(p["CITY"]).title()), []).append(c)
+
                 acct = f"{clean(p.get('ASSESS_DIST')) or '??'}-{clean(p.get('ACCOUNT')) or '?'}"
                 lib, fol = clean(p.get("LIBER")), clean(p.get("FOLIO"))
                 d = {
@@ -210,6 +236,8 @@ def main():
                     "lu": use, "lul": USE_LABEL.get(use), "z": clean(p.get("ZONE_CODE1")),
                     "yb": (clean(p.get("YEAR_BUILT")) or "").lstrip("0") or None,
                     "url": clean(p.get("SDAT_ACCOUNT_URL")),
+                    "ex": p.get("EXEMPT_ASSESSMENT") or None, "exc": clean(p.get("EXEMPT_CLASS")),
+                    "c": c,
                 }
                 if private:
                     d["pv"] = 1
@@ -218,11 +246,32 @@ def main():
                         "o": name, "co": clean(p.get("ICO_NAME")), "ma": mail_address(p),
                         "lf": f"{lib}/{fol}" if lib and fol and lib.strip("0") else None,
                     })
+                    if name and name != "UNKNOWN":
+                        g = owners.setdefault(name, {"t": t, "ids": [], "ac": 0.0, "pts": []})
+                        g["ids"].append(pid)
+                        g["ac"] += p.get("LAND_AREA_ACRE") or 0
+                        g["pts"].append(c)
+                    if d.get("a"):
+                        addrs.append([d["a"], pid])
                 d = {k: v for k, v in d.items() if v not in (None, "", 0) or k in ("lv", "iv", "tv")}
                 shards.setdefault(pid[-3:].rjust(3, "0"), {})[pid] = d
 
     for key, recs in shards.items():
         (SHARDS / f"{key}.json").write_text(json.dumps(recs, separators=(",", ":")))
+
+    search = {
+        # [name, type, parcel count, acres, bbox, ids, flat centroids [x0,y0,x1,y1,...]]
+        "owners": sorted(([n, g["t"], len(g["ids"]), round(g["ac"], 2), bbox(g["pts"]), g["ids"],
+                           [round(v, 4) for pt in g["pts"] for v in pt]]
+                          for n, g in owners.items()), key=lambda r: -r[3]),
+        "addrs": addrs,
+        # [label, kind, parcel count, bbox]  (trim 2% outliers: stray geocodes)
+        "places": sorted(([label, kind, len(pts), bbox(pts, 0.02)]
+                          for (kind, label), pts in places.items() if len(pts) >= 20),
+                         key=lambda r: -r[2]),
+    }
+    (WEB_DATA / "search.json").write_text(json.dumps(search, separators=(",", ":")))
+    print(f"search: {len(search['owners'])} owners, {len(addrs)} addresses, {len(search['places'])} places")
 
     as_of = datetime.fromtimestamp(max_import / 1000, tz=timezone.utc) if max_import else None
     meta = {

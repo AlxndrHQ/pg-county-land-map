@@ -1,4 +1,4 @@
-/* Ground Truth — M1: parcels on a map, click for SDAT attributes. */
+/* Real Estate Map — parcels on a map (M1) + search (M2). */
 (() => {
   "use strict";
 
@@ -85,10 +85,13 @@
           "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.3, 15, 0.7, 18, 1.2],
           "line-opacity": ["case", ["==", ["get", "t"], "p"], 0.9, 0.95],
         } },
+      { id: "sel-dots", type: "circle", source: "seldots", maxzoom: 14,
+        paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2.2, 13, 4], "circle-color": P.accent,
+                 "circle-stroke-color": P.bg, "circle-stroke-width": 1 } },
       { id: "parcel-sel-fill", type: "fill", source: "parcels", "source-layer": "parcels",
-        filter: ["==", ["get", "id"], selectedId || ""], paint: { "fill-color": P.accentSoft } },
+        filter: selFilter(), paint: { "fill-color": P.accentSoft } },
       { id: "parcel-sel-line", type: "line", source: "parcels", "source-layer": "parcels",
-        filter: ["==", ["get", "id"], selectedId || ""],
+        filter: selFilter(),
         paint: { "line-color": P.accent, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 17, 2] } },
     ];
   }
@@ -100,6 +103,7 @@
       type: "vector", url: "pmtiles://" + PARCELS_URL,
       attribution: "Parcel data: MD iMAP, MDP, SDAT; PG County DPIE",
     };
+    s.sources.seldots = { type: "geojson", data: dotsData() };
     // Parcels sit above roads and below labels.
     const firstSymbol = s.layers.findIndex((l) => l.type === "symbol");
     s.layers.splice(firstSymbol < 0 ? s.layers.length : firstSymbol, 0, ...parcelLayers(P));
@@ -110,7 +114,8 @@
   const protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
 
-  let map, selectedId = null;
+  let map, selectedIds = [];
+  const selFilter = () => ["in", ["get", "id"], ["literal", selectedIds]];
 
   fetch(BASE_STYLE_URL).then((r) => r.json()).then((base) => {
     baseStyle = base;
@@ -126,7 +131,7 @@
     map.on("mouseleave", "parcel-hit", () => (map.getCanvas().style.cursor = ""));
     map.on("click", (e) => {
       const f = map.queryRenderedFeatures(e.point, { layers: ["parcel-hit"] })[0];
-      if (f) select(f.properties.id, f.properties.t);
+      if (f) select(f.properties.id);
       else closeDrawer();
     });
   }).catch((err) => {
@@ -138,10 +143,19 @@
     document.getElementById("hint").classList.toggle("off", map.getZoom() >= PARCEL_MINZOOM);
   }
 
-  function setSelected(id) {
-    selectedId = id;
-    const f = ["==", ["get", "id"], id || ""];
-    if (map.getLayer("parcel-sel-fill")) { map.setFilter("parcel-sel-fill", f); map.setFilter("parcel-sel-line", f); }
+  let selPts = [];
+  function dotsData() {
+    const f = [];
+    for (let i = 0; i < selPts.length; i += 2) f.push({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [selPts[i], selPts[i + 1]] } });
+    return { type: "FeatureCollection", features: f };
+  }
+  function setSelected(ids, pts) {
+    selectedIds = ids || [];
+    selPts = pts || [];
+    if (map && map.getSource("seldots")) map.getSource("seldots").setData(dotsData());
+    if (map && map.getLayer("parcel-sel-fill")) {
+      map.setFilter("parcel-sel-fill", selFilter()); map.setFilter("parcel-sel-line", selFilter());
+    }
   }
 
   themeBtn.addEventListener("click", () => {
@@ -173,20 +187,24 @@
   const body = document.getElementById("drawer-body");
   let reqToken = 0;
 
-  function select(id, t) {
-    setSelected(id);
+  function select(id, opts = {}) {
+    setSelected([id]);
     drawer.hidden = false;
     body.innerHTML = `<div class="lbl">Loading…</div>`;
     const token = ++reqToken;
     loadShard(id).then((d) => {
       if (token !== reqToken) return;
-      body.innerHTML = d ? render(d) : `<div class="lbl">No record found for ${esc(id)}</div>`;
+      if (!d) { setSelected([]); body.innerHTML = `<div class="lbl">No parcel with account ${esc(opts.label || id)}</div>`; return; }
+      body.innerHTML = (opts.back ? opts.back : "") + render(d);
+      wireBack();
+      if (opts.fly && d.c && map) map.flyTo({ center: d.c, zoom: Math.max(map.getZoom(), 16.5), padding: drawerPad() });
     }).catch((e) => {
       if (token === reqToken) body.innerHTML = `<div class="lbl">Couldn't load parcel details</div><p class="note">${esc(e.message)}</p>`;
     });
   }
 
-  function closeDrawer() { drawer.hidden = true; setSelected(null); }
+  function closeDrawer() { drawer.hidden = true; setSelected([]); }
+  const drawerPad = () => (innerWidth > 640 ? { right: 400, top: 40, bottom: 40, left: 40 } : { bottom: innerHeight * 0.62, top: 20, left: 20, right: 20 });
   document.getElementById("close").addEventListener("click", closeDrawer);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeDrawer(); limits.hidden = true; } });
 
@@ -200,6 +218,13 @@
     return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
   }
   const row = (k, v) => (v == null || v === "" ? "" : `<dt>${k}</dt><dd>${v}</dd>`);
+
+  function taxStatus(d) {
+    if (!d.ex) return `Taxable`;
+    const full = d.tv && d.ex >= d.tv;
+    return `${full ? "Fully exempt" : `Partly exempt <span class="num">(${usd(d.ex)})</span>`}`
+      + `<span class="sub">SDAT exempt class ${esc(d.exc || "—")}</span>`;
+  }
 
   function render(d) {
     const P = PAL[theme()];
@@ -222,6 +247,7 @@
         ${row("Land", `<span class="num">${usd(d.lv)}</span>`)}
         ${row("Building", `<span class="num">${usd(d.iv)}</span>`)}
         ${row("Assessed", `<span class="num">${usd(d.tv)}</span>`)}
+        ${row("Tax status", taxStatus(d))}
         ${row("Last sale", sale && `<span class="num">${sale}</span>`)}
         ${row("Deed", d.lf && `<span class="num">Liber/folio ${esc(d.lf)}</span>`)}
         ${row("Land use", use)}
@@ -232,6 +258,150 @@
         Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
         ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">SDAT record ↗</a>` : ""}
       </div>`;
+  }
+
+  // ---------- owner view (exact owner-name match; related-LLC grouping comes in M3) ----------
+  let lastOwner = null;
+  function showOwner(o) {
+    const [name, t, n, ac, bb, ids, pts] = o;
+    lastOwner = o;
+    reqToken++;
+    setSelected(ids, pts);
+    drawer.hidden = false;
+    const P = PAL[theme()];
+    const list = ids.slice(0, 300).map((id) =>
+      `<li><button type="button" data-id="${esc(id)}">${esc(addrById.get(id) || "Account " + id)}</button></li>`).join("");
+    body.innerHTML = `
+      <span class="lbl type" style="--c:${P.t[t] || P.edgeStrong}"><i></i>${esc(TYPE_LABEL[t] || "Owner")}</span>
+      <h2>${esc(name)}</h2>
+      <p class="addr">${n.toLocaleString("en-US")} parcel${n === 1 ? "" : "s"} · ${acres(ac)}</p>
+      <p class="note">Parcels whose owner of record is exactly this name. Related LLCs that share a mailing address will be grouped in a later version.</p>
+      <ul class="plist">${list}</ul>
+      ${ids.length > 300 ? `<p class="addr">Showing 300 of ${ids.length.toLocaleString("en-US")}. All are highlighted on the map.</p>` : ""}`;
+    body.querySelectorAll(".plist button").forEach((b) => b.addEventListener("click", () =>
+      select(b.dataset.id, { fly: true, back: `<button type="button" class="back linkish">← ${esc(name)}</button>` })));
+    if (map) map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: drawerPad(), maxZoom: 17 });
+  }
+  function wireBack() {
+    const b = body.querySelector(".back");
+    if (b && lastOwner) b.addEventListener("click", () => showOwner(lastOwner));
+  }
+
+  // ---------- search: entity owners, addresses, ZIPs, cities, account numbers ----------
+  const input = document.getElementById("q");
+  const results = document.getElementById("results");
+  let indexP = null;
+  const addrById = new Map();
+  function loadIndex() {
+    if (!indexP) indexP = fetch("data/search.json").then((r) => r.json()).then((d) => {
+      for (const [a, id] of d.addrs) addrById.set(id, a);
+      d.ownersU = d.owners.map((o) => o[0].toUpperCase());
+      d.addrsU = d.addrs.map((a) => a[0].toUpperCase());
+      d.placesU = d.places.map((p) => p[0].toUpperCase());
+      return d;
+    }).catch((e) => { indexP = null; throw e; });
+    return indexP;
+  }
+  input.addEventListener("focus", () => loadIndex().catch(() => {}));
+
+  let items = [], active = -1, timer = 0;
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(runSearch, 90); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!items.length) return;
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      paintActive();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      clearTimeout(timer);
+      const keep = active;
+      runSearch().then(() => choose(items[Math.max(keep, 0)]));
+    } else if (e.key === "Escape") {
+      closeResults(); input.blur();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && document.activeElement !== input) { e.preventDefault(); input.focus(); }
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".search")) closeResults(); });
+  function closeResults() { results.hidden = true; active = -1; }
+
+  async function runSearch() {
+    const raw = input.value.trim();
+    items = [];
+    if (raw.length < 2) { closeResults(); return; }
+    let d;
+    try { d = await loadIndex(); } catch (e) {
+      results.innerHTML = `<div class="empty">Search index failed to load.</div>`; results.hidden = false; return;
+    }
+    const q = raw.toUpperCase().replace(/\s+/g, " ");
+    const toks = q.split(" ");
+    const hasAll = (h) => toks.every((t) => h.includes(t));
+
+    // Account number: "19-2822633", "19 2822633" or the 9-digit property id.
+    const parts = raw.split(/[\s-]+/);
+    if (/^\d{9}$/.test(raw)) items.push({ kind: "acct", id: raw, label: raw });
+    else if (parts.length === 2 && /^\d{1,2}$/.test(parts[0]) && /^\d{5,7}$/.test(parts[1]))
+      items.push({ kind: "acct", id: parts[0].padStart(2, "0") + parts[1].padStart(7, "0"), label: raw });
+
+    const places = [];
+    d.placesU.forEach((h, i) => { if (h.startsWith(q)) places.push(d.places[i]); });
+    places.slice(0, 4).forEach((p) => items.push({ kind: "place", p }));
+
+    const pref = [], rest = [];
+    for (let i = 0; i < d.ownersU.length && pref.length < 8; i++) {
+      const h = d.ownersU[i];
+      if (h.startsWith(q)) pref.push(i); else if (rest.length < 8 && hasAll(h)) rest.push(i);
+    }
+    [...pref, ...rest].slice(0, 8).forEach((i) => items.push({ kind: "owner", o: d.owners[i] }));
+
+    if (/\d/.test(q) || items.length < 6) {
+      let n = 0;
+      for (let i = 0; i < d.addrsU.length && n < 6; i++) {
+        if (hasAll(d.addrsU[i])) { items.push({ kind: "addr", a: d.addrs[i] }); n++; }
+      }
+    }
+    paint();
+  }
+
+  const KIND_LABEL = { acct: "Account", place: "Places", owner: "Owners", addr: "Addresses" };
+  function paint() {
+    if (!items.length) {
+      results.innerHTML = `<div class="empty">No matches. Homes owned by individuals aren't searchable by owner name.</div>`;
+      results.hidden = false; return;
+    }
+    let html = "", last = "";
+    items.forEach((it, i) => {
+      if (it.kind !== last) { html += `<div class="lbl grp">${KIND_LABEL[it.kind]}</div>`; last = it.kind; }
+      let main, sub = "";
+      if (it.kind === "acct") main = `Go to account ${esc(it.label)}`;
+      else if (it.kind === "place") { main = esc(it.p[1] === "zip" ? "ZIP " + it.p[0] : it.p[0]); sub = `${it.p[2].toLocaleString("en-US")} parcels`; }
+      else if (it.kind === "owner") { main = esc(it.o[0]); sub = `${it.o[2].toLocaleString("en-US")} parcel${it.o[2] === 1 ? "" : "s"} · ${acres(it.o[3])}`; }
+      else main = esc(it.a[0]);
+      html += `<button type="button" class="res" data-i="${i}"><span>${main}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</button>`;
+    });
+    results.innerHTML = html;
+    results.hidden = false;
+    active = -1;
+    results.querySelectorAll(".res").forEach((b) => b.addEventListener("click", () => choose(items[+b.dataset.i])));
+  }
+  function paintActive() {
+    results.querySelectorAll(".res").forEach((b) => b.classList.toggle("on", +b.dataset.i === active));
+  }
+
+  function choose(it) {
+    if (!it) return;
+    closeResults();
+    input.blur();
+    if (it.kind === "acct") select(it.id, { fly: true, label: it.label });
+    else if (it.kind === "addr") select(it.a[1], { fly: true });
+    else if (it.kind === "owner") showOwner(it.o);
+    else if (it.kind === "place" && map) {
+      closeDrawer();
+      const b = it.p[3];
+      map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 15 });
+    }
   }
 
   // ---------- footer + limits ----------

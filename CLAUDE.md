@@ -1,4 +1,4 @@
-# Ground Truth — PG County land ownership map
+# Real Estate Map — PG County land ownership map
 
 The full brief is in [HANDOFF.md](HANDOFF.md). Read it before starting a milestone. These rules always apply:
 
@@ -18,7 +18,7 @@ The full brief is in [HANDOFF.md](HANDOFF.md). Read it before starting a milesto
 ## Layout
 ```
 scripts/fetch_parcels.py   page PG County "Property Flattened" layer -> data/raw/pages/ (cached, resumable)
-scripts/build_parcels.py   classify owners, apply privacy rule -> data/build/parcels.geojsonl, web/data/parcels/NNN.json, web/data/meta.json
+scripts/build_parcels.py   classify owners, apply privacy rule -> data/build/parcels.geojsonl, web/data/parcels/NNN.json, web/data/search.json, web/data/meta.json
 scripts/build_tiles.sh     tippecanoe -> web/data/parcels.pmtiles
 web/                       static site (MapLibre GL + pmtiles), deployed to GitHub Pages by .github/workflows/pages.yml
 ```
@@ -29,4 +29,4 @@ Preview: `cd web && python3 -m http.server 8000`. The server must support Range 
 M1 uses the PG County DPIE "Property Flattened" layer (PG-only, already joined to SDAT). MD iMAP was down for maintenance on 2026-11-10. Keep MD iMAP Parcel Boundaries as the statewide cross-check.
 
 ## Milestones
-M1 parcels on a map (done) → M2 search → M3 owner groups → M4 case files → M5 planning overlay → M6 leaderboard. Details are in HANDOFF.md §6.
+M1 parcels on a map (done) → M2 search (done: exact owner name, entity addresses, ZIP, city, account) → M3 owner groups → M4 case files → M5 planning overlay → M6 leaderboard. Details are in HANDOFF.md §6.

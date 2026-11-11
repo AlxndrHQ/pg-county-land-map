@@ -1,4 +1,4 @@
-# Ground Truth
+# Real Estate Map
 
 An open-data map of Prince George's County, Maryland that answers one question: **who owns the land under this?**
 

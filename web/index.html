@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Ground Truth — Land Ownership in Prince George's County</title>
+<title>Real Estate Map — Who Owns Prince George's County</title>
 <meta name="description" content="An open-data map of Prince George's County, Maryland that answers one question: who owns the land under this?">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 3h7v5H2zM9 8h5v5H9z' fill='none' stroke='%238A5A2B' stroke-width='1.2'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -20,8 +20,14 @@
   <header class="top">
     <div class="row1">
       <div class="brand">
-        <h1>Ground Truth</h1>
+        <h1>Real Estate Map</h1>
         <small>Who owns the land · Prince George's County, MD</small>
+      </div>
+      <div class="search" role="search">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Owner, address, ZIP, city or account" aria-label="Search">
+        <kbd>/</kbd>
+        <div class="results" id="results" hidden role="listbox"></div>
       </div>
       <nav class="tabs">
         <a class="tablink" href="https://alxndrhq.github.io/historical-wealth-mind-map/" target="_blank" rel="noopener">Wealth Web ↗</a>
