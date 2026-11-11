@@ -67,6 +67,85 @@
       "by_type": {
         "u": 100060
       }
+    },
+    "DC": {
+      "name": "Washington, DC",
+      "parcels": 137396,
+      "private": 110727,
+      "by_type": {
+        "c": 15798,
+        "g": 6385,
+        "p": 107927,
+        "r": 2177,
+        "i": 685,
+        "u": 4424
+      }
+    },
+    "AR": {
+      "name": "Arlington County, VA",
+      "parcels": 38704,
+      "private": 34534,
+      "by_type": {
+        "c": 3090,
+        "u": 34534,
+        "g": 722,
+        "r": 308,
+        "i": 50
+      }
+    },
+    "AL": {
+      "name": "City of Alexandria, VA",
+      "parcels": 47380,
+      "private": 41615,
+      "by_type": {
+        "g": 589,
+        "c": 3743,
+        "r": 922,
+        "p": 41980,
+        "i": 52,
+        "u": 94
+      }
+    },
+    "FX": {
+      "name": "Fairfax County, VA",
+      "parcels": 369633,
+      "private": 369633,
+      "by_type": {
+        "u": 369633
+      }
+    },
+    "PW": {
+      "name": "Prince William County, VA",
+      "parcels": 155770,
+      "private": 138645,
+      "by_type": {
+        "p": 137196,
+        "c": 11300,
+        "g": 1780,
+        "u": 1449,
+        "r": 3845,
+        "i": 200
+      }
+    },
+    "LO": {
+      "name": "Loudoun County, VA",
+      "parcels": 132903,
+      "private": 132903,
+      "by_type": {
+        "u": 132903
+      }
+    },
+    "FQ": {
+      "name": "Fauquier County, VA",
+      "parcels": 35921,
+      "private": 28839,
+      "by_type": {
+        "p": 29309,
+        "c": 4676,
+        "g": 584,
+        "r": 1305,
+        "i": 47
+      }
     }
   },
   "source": {

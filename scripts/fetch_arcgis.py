@@ -28,7 +28,7 @@ def fetch(code, fresh=False, limit_pages=0):
     if fresh:
         for p in out.glob("*.geojson"):
             p.unlink()
-    total = get(src["layer"] + "/query", {"where": src["where"], "returnCountOnly": "true", "f": "json"})["count"]
+    total = get(src["layer"] + "/query", {"where": src["where"], "returnCountOnly": "true", "f": "json"}).get("count", -1)
     last_oid, n, page_no = -1, 0, 0
     for p in sorted(out.glob("*.geojson")):
         feats = json.loads(p.read_text())["features"]

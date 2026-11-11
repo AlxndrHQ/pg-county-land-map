@@ -51,7 +51,11 @@ def sale_history(hist, pid, sd, sp, lf, private):
 GOV = [
     "UNITED STATES", "USA", "U S A", "STATE OF MARYLAND", "STATE OF MD", "STATE HIGHWAY",
     "PRINCE GEORGES COUNTY", "PRINCE GEORGES CO", "PR GEORGES COUNTY", "PRINCE GEORGE COUNTY",
-    "ANNE ARUNDEL COUNTY", "ANNE ARUNDEL CO", "HOWARD COUNTY", "MONTGOMERY COUNTY", "MONTGOMERY CO MD", "CHARLES COUNTY",
+    "ANNE ARUNDEL COUNTY", "ANNE ARUNDEL CO", "HOWARD COUNTY",
+    "COMMONWEALTH OF VIRGINIA", "COMMONWEALTH OF VA", "VIRGINIA DEPARTMENT", "VIRGINIA DEPT", "ARLINGTON COUNTY",
+    "COUNTY BOARD OF ARLINGTON", "FAIRFAX COUNTY", "BOARD OF SUPERVISORS", "PRINCE WILLIAM COUNTY", "PRINCE WILLIAM BOARD",
+    "LOUDOUN COUNTY", "FAUQUIER COUNTY", "NORTHERN VIRGINIA REGIONAL", "NOVA PARKS", "PARK AUTHORITY", "SCHOOL BOARD",
+    "DC GOVERNMENT", "D C GOVERNMENT", "EMBASSY", "GOVERNMENT OF", "INTERNATIONAL MONETARY FUND", "WORLD BANK", "DISTRICT OF COLUMBIA HOUSING", "ARCHITECT OF THE CAPITOL", "MONTGOMERY COUNTY", "MONTGOMERY CO MD", "CHARLES COUNTY",
     "COUNTY COMMISSIONERS OF CHARLES", "COMMISSIONERS OF CHARLES COUNTY", "COUNTY COUNCIL", "STATE ROADS",
     "COUNTY COMMISSIONERS", "BOARD OF EDUCATION", "BD OF EDUCATION", "BOARD OF COUNTY",
     "MARYLAND NATIONAL CAPITAL", "MD NATIONAL CAPITAL", "MARYLAND NATL CAPITAL", "M NCPPC", "MNCPPC",
@@ -279,12 +283,256 @@ def md_records(code):
         }
 
 
+def ms_date(v):
+    """Epoch milliseconds or 'YYYY-MM-DD...' -> 'YYYY-MM-DD'."""
+    if v in (None, "", 0):
+        return None
+    if isinstance(v, (int, float)):
+        return datetime.fromtimestamp(v / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    v = str(v).strip()
+    return v[:10] if len(v) >= 10 and v[4] == "-" else None
+
+
+def num(v):
+    try:
+        x = float(str(v).replace(",", "").strip())
+        return int(x) if x.is_integer() else x
+    except (TypeError, ValueError):
+        return None
+
+
+def join_addr(*parts):
+    return " ".join(str(x) for x in (clean(p) for p in parts) if x not in (None, "")) or None
+
+
+def dc_records():
+    for f in raw_features("DC"):
+        p = f["properties"]
+        ssl = clean(p.get("SSL"))
+        if not ssl:
+            continue
+        ptype = clean(p.get("PROPTYPE")) or ""
+        n1, n2 = clean(p.get("OWNERNAME")), clean(p.get("OWNNAME2"))
+        csz = clean(p.get("CITYSTZIP"))
+        mail = " · ".join(x for x in [join_addr(p.get("ADDRESS1"), p.get("ADDRESS2")), csz] if x) or None
+        site = clean(p.get("PREMISEADD"))
+        zip5 = site[-5:] if site and site[-5:].isdigit() else None
+        yield {
+            "pid": "DC_" + ssl.replace(" ", "-"), "geom": f.get("geometry"),
+            "name": (n1 + (f"; {n2}" if n2 else "")) if n1 else None,
+            "ico": p.get("CAREOFNAME"), "mail_street": p.get("ADDRESS1"), "mail_zip": (csz or "")[-10:-5] or None,
+            "mail": mail, "site": site, "city": "Washington", "zip": zip5, "acct": ssl,
+            "ac": round(p["LANDAREA"] / 43560, 3) if p.get("LANDAREA") else None,
+            "lv": p.get("NEWLAND"), "iv": p.get("NEWIMPR"), "tv": p.get("NEWTOTAL"),
+            "sp": p.get("SALEPRICE") or None, "sd": ms_date(p.get("SALEDATE")), "lib": None, "fol": None,
+            "deed": clean(p.get("INSTNO")),
+            "use": clean(p.get("USECODE")), "use_label": ptype or None,
+            "commercial": clean(p.get("CLASSTYPE")) == "2" and not ptype.startswith(("Residential", "Vacant"))
+                          and not clean(p.get("HSTDCODE")),
+            "zone": None, "yb": None, "url": None, "ex": None, "exc": None,
+            "imported": p.get("EXTRACTDAT"), "basis": "record",
+        }
+
+
+# Business land uses only: a person's name is shown nowhere else (farms, apartments, vacant and unclear uses stay private).
+AL_BUSINESS = ("COMMERC", "COM AREA", "OFFICE", "WHSE", "WAREHOUSE", "RESTAURANT", "FAST FOOD", "HOTEL", "SHOPPING",
+               "SERVICE STATION", "FINANCIAL", "AUTO ", "STORAGE", "CONVENIENCE", "REPAIR", "INDUST", "GAS KIOSK", "RETAIL",
+               "NURSING HOME")
+
+
+def al_records():
+    vals = {r["ACCOUNTNO"]: r for r in (f["properties"] for f in raw_features("AL_values")) if r.get("ACCOUNTNO")}
+    for f in raw_features("AL"):
+        p = f["properties"]
+        acct = clean(p.get("ACCOUNTNO"))
+        if not acct:
+            continue
+        v = vals.get(acct, {})
+        desc = clean(p.get("LANDDESC")) or ""
+        n1, n2 = clean(p.get("OWN_NAME")), clean(p.get("OWNERNAME2"))
+        city = join_addr(clean(p.get("OWN_CITY")) and clean(p.get("OWN_CITY")) + ",", p.get("OWN_STAT"), p.get("OWN_ZIP"))
+        yield {
+            "pid": "AL_" + acct, "geom": f.get("geometry"),
+            "name": (n1 + (f"; {n2}" if n2 else "")) if n1 else None, "ico": None,
+            "mail_street": p.get("OWN_ADD"), "mail_zip": p.get("OWN_ZIP"),
+            "mail": " · ".join(x for x in [join_addr(p.get("OWN_ADD"), p.get("OWN_ADD2")), city] if x) or None,
+            "site": ", ".join(x for x in [clean(p.get("ADDRESS_GIS")) + (f" #{clean(p.get('UNIT'))}" if clean(p.get("UNIT")) else "")
+                                          if clean(p.get("ADDRESS_GIS")) else None, "Alexandria, VA"] if x),
+            "city": "Alexandria", "zip": None, "acct": clean(p.get("PID_RE")) or acct,
+            "ac": round(p["LAND_SF"] / 43560, 3) if p.get("LAND_SF") else None,
+            "lv": v.get("LAND_CYR"), "iv": v.get("IMP_CYR"), "tv": v.get("TOT_CYR"),
+            "sp": None, "sd": None, "lib": None, "fol": None, "deed": clean(p.get("INSTRUMENT")),
+            "use": clean(p.get("LANDCODE")), "use_label": desc.title() or None,
+            "commercial": any(w in desc.upper() for w in AL_BUSINESS) and "RES" not in desc.upper(),
+            "zone": clean(p.get("ZONING")), "yb": None, "url": None, "ex": None, "exc": None,
+            "imported": None, "basis": "record",
+        }
+
+
+FQ_BUSINESS = ("COMM - INDL", "COMMERCIAL", "PUBLIC SERVICE")
+
+
+def fq_records():
+    for f in raw_features("FQ"):
+        p = f["properties"]
+        pid = clean(p.get("PARCELID"))
+        if not pid:
+            continue
+        desc = clean(p.get("Primary__1")) or ""
+        n1, n2 = clean(p.get("OWNERNME1")), clean(p.get("Co_Owner2"))
+        bp = clean(p.get("CURRENTOWN"))
+        lib, fol = (bp.split("/", 1) + [None])[:2] if bp and "/" in bp else (None, None)
+        sp = num(p.get("LASTSALEPR"))
+        yield {
+            "pid": "FQ_" + pid, "geom": f.get("geometry"),
+            "name": (n1 + (f"; {n2}" if n2 else "")) if n1 else None, "ico": None,
+            "mail_street": p.get("PSTLADDRES"), "mail_zip": p.get("PSTLZIP5"),
+            "mail": " · ".join(x for x in [join_addr(p.get("PSTLADDRES"), p.get("PSTLADDR_1"), p.get("PSTLADDR_2")),
+                                            join_addr(clean(p.get("PSTLCITY")) and clean(p.get("PSTLCITY")) + ",",
+                                                      p.get("PSTLSTATE"), p.get("PSTLZIP5"))] if x) or None,
+            "site": clean(p.get("SITEADDRES")), "city": None, "zip": None, "acct": pid,
+            "ac": num(p.get("ACREAGE")), "lv": num(p.get("Land_Value")), "iv": num(p.get("Building_V")),
+            "tv": num(p.get("Final_Valu")), "sp": sp or None, "sd": ms_date(p.get("LASTSALEDA")),
+            "lib": lib, "fol": fol, "deed": None,
+            "use": clean(p.get("Primary_Us")), "use_label": desc or None,
+            "commercial": any(w in desc.upper() for w in FQ_BUSINESS) and "RES" not in desc.upper(),
+            "zone": None, "yb": (clean(p.get("Year_Built")) or "").lstrip("0") or None,
+            "url": None, "ex": None, "exc": None, "imported": None, "basis": "record",
+        }
+
+
+def pw_records():
+    for f in raw_features("PW"):
+        p = f["properties"]
+        gpin = clean(p.get("GPIN"))
+        if not gpin:
+            continue
+        unit = clean(p.get("UnitNumber"))
+        site = join_addr(p.get("StreetNumber"), p.get("StreetName"), p.get("StreetType")) 
+        if site and unit:
+            site += f" #{unit}"
+        city = join_addr(clean(p.get("CAMA_CITY")) and clean(p.get("CAMA_CITY")) + ",", p.get("CAMA_STATE"), p.get("CAMA_ZIPCODE"))
+        yield {
+            "pid": "PW_" + gpin, "geom": f.get("geometry"), "name": clean(p.get("CAMA_OWNER_CUR")), "ico": None,
+            "mail_street": p.get("CAMA_ADDRESS2"), "mail_zip": p.get("CAMA_ZIPCODE"),
+            "mail": " · ".join(x for x in [join_addr(p.get("CAMA_ADDRESS2"), p.get("CAMA_ADDRESS3")), city] if x) or None,
+            "site": ", ".join(x for x in [site, join_addr(p.get("City"), p.get("ZipCode"))] if x) or None,
+            "city": (clean(p.get("City")) or "").title() or None, "zip": clean(p.get("ZipCode")),
+            "acct": clean(p.get("CAMA_Account")) or gpin,
+            "ac": p.get("CAMA_TaxAcreage1") or p.get("Acreage"),
+            "lv": None, "iv": None, "tv": None, "sp": None, "sd": None,
+            "lib": clean(p.get("DeedBook")), "fol": clean(p.get("DeedPage")), "deed": clean(p.get("DeedInstrument")),
+            "use": clean(p.get("CAMA_USECODE")), "use_label": None,
+            # No public use-code table yet: treat every person-owned parcel as private (safe default).
+            "commercial": False,
+            "zone": None, "yb": None, "url": None, "ex": None, "exc": None, "imported": None, "basis": "record",
+        }
+
+
+def fx_records():
+    def table(code):
+        return {r["PARID"]: r for r in (f["properties"] for f in raw_features(code)) if r.get("PARID")}
+    vals, use, legal = table("FX_values"), table("FX_use"), table("FX_legal")
+    for f in raw_features("FX"):
+        pin = clean(f["properties"].get("PIN"))
+        if not pin:
+            continue
+        key = f["properties"]["PIN"]
+        v, u, lg = vals.get(key, {}), use.get(key, {}), legal.get(key, {})
+        site = join_addr(lg.get("ADRNO"), lg.get("ADRADD"), lg.get("ADRDIR"), lg.get("ADRSTR"), lg.get("ADRSUF"))
+        yield {
+            "pid": "FX_" + pin.replace(" ", "-"), "geom": f.get("geometry"), "name": None, "names_published": False,
+            "ico": None, "mail_street": None, "mail_zip": None, "mail": None,
+            "site": ", ".join(x for x in [site, join_addr(lg.get("CITYNAME"), lg.get("ZIP1"))] if x) or None,
+            "city": (clean(lg.get("CITYNAME")) or "").title() or None, "zip": clean(lg.get("ZIP1")), "acct": pin,
+            "ac": lg.get("ACRES"), "lv": v.get("APRLAND"), "iv": v.get("APRBLDG"), "tv": v.get("APRTOT"),
+            "sp": None, "sd": None, "lib": None, "fol": None, "deed": None,
+            "use": None, "use_label": clean(u.get("LUC_DESC")),
+            "commercial": False, "zone": clean(u.get("ZONING_DESC")), "yb": None, "url": None,
+            "ex": None, "exc": None if (v.get("FLAG4_DESC") or "").startswith("No ") else clean(v.get("FLAG4_DESC")),
+            "imported": None, "basis": "record",
+        }
+
+
+def lo_records():
+    for f in raw_features("LO"):
+        p = f["properties"]
+        mcpi = clean(p.get("PA_MCPI"))
+        if not mcpi:
+            continue
+        yield {
+            "pid": "LO_" + mcpi, "geom": f.get("geometry"), "name": None, "names_published": False,
+            "ico": None, "mail_street": None, "mail_zip": None, "mail": None,
+            "site": None, "city": None, "zip": None, "acct": mcpi, "ac": p.get("PA_LEGAL_ACRE"),
+            "lv": None, "iv": None, "tv": None, "sp": None, "sd": None, "lib": None, "fol": None, "deed": None,
+            "use": None, "use_label": clean(p.get("PA_SUBD_NAME")) and "Subdivision: " + clean(p.get("PA_SUBD_NAME")).title(),
+            "commercial": False, "zone": None, "yb": None, "url": None, "ex": None, "exc": None,
+            "imported": None, "basis": "record",
+        }
+
+
+def ar_rows(table):
+    for f in sorted((ROOT / "data" / "raw" / f"AR_{table}").glob("*.json")):
+        yield from json.loads(f.read_text())
+
+
+def ar_records():
+    props = {}
+    for r in ar_rows("Property"):
+        props.setdefault(r["realEstatePropertyCode"], r)
+    vals = {r["realEstatePropertyCode"]: r for r in ar_rows("Assessment")}
+    last = {}
+    for r in ar_rows("SalesHistory"):
+        k = r["realEstatePropertyCode"]
+        if k not in last or (r.get("saleDate") or "") > (last[k].get("saleDate") or ""):
+            last[k] = r
+    for f in raw_features("AR"):
+        code = clean(f["properties"].get("RPCMSTR"))
+        if not code:
+            continue
+        pr, v, s = props.get(code, {}), vals.get(code, {}), last.get(code, {})
+        buyer = clean(s.get("granteeName"))
+        buyer = buyer.rstrip(" &") if buyer else None
+        # Owner names are redacted by the county. The latest buyer stands in for the owner only when it is
+        # clearly an entity (decided 2026-11-11), labeled as such; a person's name is never used.
+        name = buyer if buyer and owner_type(buyer) != "p" else None
+        masked = pr.get("maskOwnerAddressInd")
+        city = join_addr(clean(pr.get("ownerCityName")) and clean(pr.get("ownerCityName")) + ",",
+                         pr.get("ownerStateCode"), pr.get("ownerZipCode"))
+        cls = clean(pr.get("propertyClassTypeDsc")) or ""
+        yield {
+            "pid": "AR_" + code, "geom": f.get("geometry"), "name": name,
+            "names_published": True, "ico": None,
+            "mail_street": None if masked else pr.get("ownerStreetText"), "mail_zip": pr.get("ownerZipCode"),
+            "mail": None if masked or not name else " · ".join(x for x in [clean(pr.get("ownerStreetText")), city] if x) or None,
+            "site": ", ".join(x for x in [clean(pr.get("propertyStreetNbrNameText")),
+                                          join_addr(pr.get("propertyCityName"), pr.get("propertyZipCode"))] if x) or None,
+            "city": "Arlington", "zip": clean(pr.get("propertyZipCode")), "acct": code,
+            "ac": round(pr["lotSizeQty"] / 43560, 3) if pr.get("lotSizeQty") else None,
+            "lv": v.get("landValueAmt"), "iv": v.get("improvementValueAmt"), "tv": v.get("totalValueAmt"),
+            "sp": s.get("saleAmt") or None, "sd": ms_date(s.get("saleDate")),
+            "lib": clean(s.get("deedBookNbr")), "fol": clean(s.get("deedPageNbr")), "deed": None,
+            "use": clean(pr.get("propertyClassTypeCode")), "use_label": cls.split("-", 1)[-1] if cls else None,
+            "commercial": bool(pr.get("commercialInd")),
+            "zone": clean(pr.get("zoningDescListText")), "yb": pr.get("propertyYearBuilt") or None,
+            "url": None, "ex": None, "exc": clean(pr.get("taxExemptionTypeDsc")),
+            "imported": None, "basis": "last buyer" if name else "record",
+        }
+
+
 REGIONS = [  # code, label, records(), output folder for detail shards
     ("PG", "Prince George's County, MD", pg_records, SHARDS),
     ("AA", "Anne Arundel County, MD", lambda: md_records("AA"), ROOT / "data" / "out" / "AA" / "parcels"),
     ("MO", "Montgomery County, MD", lambda: md_records("MO"), ROOT / "data" / "out" / "MO" / "parcels"),
     ("CH", "Charles County, MD", lambda: md_records("CH"), ROOT / "data" / "out" / "CH" / "parcels"),
     ("HO", "Howard County, MD", lambda: md_records("HO"), ROOT / "data" / "out" / "HO" / "parcels"),
+    ("DC", "Washington, DC", dc_records, ROOT / "data" / "out" / "DC" / "parcels"),
+    ("AR", "Arlington County, VA", ar_records, ROOT / "data" / "out" / "AR" / "parcels"),
+    ("AL", "City of Alexandria, VA", al_records, ROOT / "data" / "out" / "AL" / "parcels"),
+    ("FX", "Fairfax County, VA", fx_records, ROOT / "data" / "out" / "FX" / "parcels"),
+    ("PW", "Prince William County, VA", pw_records, ROOT / "data" / "out" / "PW" / "parcels"),
+    ("LO", "Loudoun County, VA", lo_records, ROOT / "data" / "out" / "LO" / "parcels"),
+    ("FQ", "Fauquier County, VA", fq_records, ROOT / "data" / "out" / "FQ" / "parcels"),
 ]
 
 
@@ -352,7 +600,8 @@ def main():
                     d["pv"] = 1
                 else:
                     d.update({"o": name, "co": clean(r["ico"]), "ma": r["mail"],
-                              "lf": f"{lib}/{fol}" if lib and fol and lib.strip("0") else None})
+                              "lf": f"{lib}/{fol}" if lib and fol and lib.strip("0") else None,
+                              "dn": r.get("deed")})
                     if r["basis"] != "record":
                         d["ob"] = r["basis"]
                     if name and name != "UNKNOWN":

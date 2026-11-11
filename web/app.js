@@ -16,6 +16,27 @@
           src: "Owner names from Charles County's tax parcel layer; values, land use and sales from SDAT via MD iMAP" },
     HO: { name: "Howard County, MD", repo: "rem-data-md", county: "Howard", noNames: true,
           src: "Values, land use and sales from SDAT via MD iMAP. Howard County publishes no owner names in machine-readable form" },
+    DC: { name: "Washington, DC", repo: "rem-data-va", county: "DC", place: "the District", state: "DC",
+          src: "Owner of record, values and last sale from DC's Owner Polygons layer (Office of Tax and Revenue via DC GIS)",
+          rec: ["DC real property search", "https://mytax.dc.gov/_/"] },
+    AR: { name: "Arlington County, VA", repo: "rem-data-va", county: "Arlington", state: "VA",
+          src: "Values, land use and sales from Arlington County's real estate data. The county redacts owner names; where shown, the owner is the most recent buyer when that buyer is a company",
+          rec: ["Arlington property search", "https://propertysearch.arlingtonva.us/"] },
+    AL: { name: "City of Alexandria, VA", repo: "rem-data-va", county: "Alexandria", place: "Alexandria", state: "VA",
+          src: "Owner of record, land use and values from the City of Alexandria's parcel and assessment layers",
+          rec: ["Alexandria real estate search", "https://realestate.alexandriava.gov/"] },
+    FX: { name: "Fairfax County, VA", repo: "rem-data-va", county: "Fairfax", noNames: true, state: "VA",
+          src: "Values, land use and zoning from Fairfax County Tax Administration. Fairfax publishes no owner names in its open data",
+          rec: ["Fairfax iCARE", "https://icare.fairfaxcounty.gov/"] },
+    PW: { name: "Prince William County, VA", repo: "rem-data-va", county: "Prince William", state: "VA",
+          src: "Owner of record, mailing address and deed from Prince William County's open data (no values or sale prices published there)",
+          rec: ["Prince William real estate assessments", "https://www.pwcva.gov/department/real-estate-assessments"] },
+    LO: { name: "Loudoun County, VA", repo: "rem-data-va", county: "Loudoun", noNames: true, state: "VA",
+          src: "Parcel shapes and acreage from Loudoun County GIS. Loudoun publishes no owner names, values or sales in machine-readable form",
+          rec: ["Loudoun parcel database", "https://reparcelasmt.loudoun.gov/"] },
+    FQ: { name: "Fauquier County, VA", repo: "rem-data-va", county: "Fauquier", state: "VA",
+          src: "Owner of record, values and last sale from Fauquier County GIS tax parcels",
+          rec: ["Fauquier property records", "https://www.actdatascout.com/RealProperty/Virginia/Fauquier"] },
   };
   const regionBase = (code) => LOCAL ? new URL(`data/r/${code}/`, location.href).href
     : `https://alxndrhq.github.io/${REGIONS[code].repo}/${code}/`;
@@ -101,7 +122,8 @@
     const tc = tagColorExpr(P);
     const per = (base, def) => SRC.map(([src, sfx]) => ({ ...def, id: base + sfx, source: src, "source-layer": "parcels" }));
     return [
-      ...per("parcel-hit", { type: "fill", minzoom: PARCEL_MINZOOM, paint: { "fill-color": P.bg, "fill-opacity": 0 } }),
+      ...per("parcel-hit", { type: "fill", minzoom: PARCEL_MINZOOM, filter: ["!=", ["get", "t"], "u"],
+        paint: { "fill-color": P.bg, "fill-opacity": 0 } }),
       ...per("parcel-line", { type: "line", minzoom: PARCEL_MINZOOM,
         paint: {
           "line-color": muteOthers ? P.edge : typeColor,
@@ -296,16 +318,17 @@
     const title = d.nn ? "Owner not published" : d.pv ? "Individually owned" : esc(d.o || "Owner not listed");
     const privacyNote = d.nn
       ? (reg && reg.noNames
-        ? `<p class="note">${esc(reg.county)} County doesn't publish owner names in its open data, so this map doesn't show the owner or mailing address. The owner of record is on SDAT.</p>`
-        : `<p class="note">This parcel has no match in the county's published owner list, so this map doesn't show an owner or mailing address. The owner of record is on SDAT.</p>`)
+        ? `<p class="note">${esc(reg.place || reg.county + " County")} doesn't publish owner names in its open data, so this map doesn't show the owner or mailing address. The owner of record is on ${esc(reg.rec ? reg.rec[0] : "SDAT")}.</p>`
+        : `<p class="note">This parcel has no owner name in the published data, so this map doesn't show an owner or mailing address. The owner of record is on ${esc(reg && reg.rec ? reg.rec[0] : "SDAT")}.</p>`)
       : d.pv
-      ? `<p class="note">This home appears to be owned by an individual. To protect their privacy, this map doesn't show the owner's name or mailing address. The record is public on SDAT.</p>`
+      ? `<p class="note">This home appears to be owned by an individual. To protect their privacy, this map doesn't show the owner's name or mailing address. The record is public on ${esc(reg && reg.rec ? reg.rec[0] : "SDAT")}.</p>`
       : "";
     const sale = d.sd || d.sp ? `${usd(d.sp)}<span class="sub">${esc(date(d.sd) || "date not recorded")}</span>` : null;
     const use = d.lu ? `${esc(d.lul || d.lu)}${d.lul ? ` <span class="num" style="color:var(--dim)">${esc(d.lu)}</span>` : ""}` : null;
     return `
       ${typeDot}
       <h2>${title}</h2>
+      ${d.ob ? `<p class="note">Likely owner: the most recent buyer in the county's sales records, not the owner of record. Confirm with the deed.</p>` : ""}
       <p class="addr">${esc(d.a || "No site address on record")}</p>
       <div id="proj-slot"></div>
       <div id="tag-slot"></div>
@@ -320,7 +343,7 @@
         ${row("Assessed", `<span class="num">${usd(d.tv)}</span>`)}
         ${row("Tax status", taxStatus(d))}
         ${d.sh ? row(`Sales <span class="dim">${d.sh.length}</span>`, salesList(d.sh)) : row("Last sale", sale && `<span class="num">${sale}</span>`)}
-        ${row("Deed", d.lf && `<span class="num">Liber/folio ${esc(d.lf)}</span>`)}
+        ${row("Deed", d.lf ? `<span class="num">${reg && reg.state ? "Book/page" : "Liber/folio"} ${esc(d.lf)}</span>` : d.dn && `<span class="num">Instrument ${esc(d.dn)}</span>`)}
         ${row("Land use", use)}
         ${row("Zoning", d.z && `<span class="num">${esc(d.z)}</span>`)}
         ${row("Built", d.yb && `<span class="num">${esc(d.yb)}</span>`)}
@@ -330,18 +353,22 @@
         ${reg ? esc(reg.src) + "." : `Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
         Sales combine SDAT's last sale with Maryland's 12-month Property Sales layer, collected since Nov 2026.`}
         <div class="links">
+          ${reg && reg.rec ? `<a href="${esc(reg.rec[1])}" target="_blank" rel="noopener">${esc(reg.rec[0])} ↗</a><span class="dim"> search ${esc(d.acct)}</span><br>` : ""}
           ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">SDAT record ↗</a><span class="dim"> needs a free SDAT login</span><br>` : ""}
-          <a href="https://sdat.dat.maryland.gov/RealProperty/Pages/default.aspx" target="_blank" rel="noopener">SDAT public search ↗</a><span class="dim"> ${reg ? `${esc(reg.county)} · account ${esc(d.acct)}` : `Prince George's · district ${esc(d.acct.split("-")[0])} · account ${esc(d.acct.split("-")[1] || "")}`}. Shows the last 3 transfers.</span><br>
-          ${!d.pv && !d.nn && d.lf ? `<a href="https://mdlandrec.net" target="_blank" rel="noopener">Maryland Land Records ↗</a><span class="dim"> deed liber ${esc(d.lf.split("/")[0])}, folio ${esc(d.lf.split("/")[1])}. Full chain of title.</span><br>` : ""}
-          ${!d.pv && !d.nn && d.o && d.t !== "g" ? entityLinks(d.o) : ""}
+          ${reg && reg.rec ? "" : `<a href="https://sdat.dat.maryland.gov/RealProperty/Pages/default.aspx" target="_blank" rel="noopener">SDAT public search ↗</a><span class="dim"> ${reg ? `${esc(reg.county)} · account ${esc(d.acct)}` : `Prince George's · district ${esc(d.acct.split("-")[0])} · account ${esc(d.acct.split("-")[1] || "")}`}. Shows the last 3 transfers.</span><br>`}
+          ${!d.pv && !d.nn && d.lf && !(reg && reg.state) ? `<a href="https://mdlandrec.net" target="_blank" rel="noopener">Maryland Land Records ↗</a><span class="dim"> deed liber ${esc(d.lf.split("/")[0])}, folio ${esc(d.lf.split("/")[1])}. Full chain of title.</span><br>` : ""}
+          ${!d.pv && !d.nn && d.o && d.t !== "g" ? entityLinks(d.o, reg && reg.state) : ""}
         </div>
       </div>`;
   }
 
   // Business-registry lookups for an entity name (opened by the viewer; nothing is fetched by the map).
-  function entityLinks(name) {
+  function entityLinks(name, state) {
     const q = encodeURIComponent(name);
-    return `<a href="https://egov.maryland.gov/BusinessExpress/EntitySearch" target="_blank" rel="noopener">Maryland Business Express ↗</a><span class="dim"> resident agent, principal office, formation state</span><br>
+    const reg = state === "VA" ? `<a href="https://cis.scc.virginia.gov/EntitySearch/Index" target="_blank" rel="noopener">Virginia SCC business search ↗</a><span class="dim"> registered agent, principal office</span><br>`
+      : state === "DC" ? `<a href="https://corponline.dcra.dc.gov/" target="_blank" rel="noopener">DC CorpOnline ↗</a><span class="dim"> registered agent, officers</span><br>`
+      : `<a href="https://egov.maryland.gov/BusinessExpress/EntitySearch" target="_blank" rel="noopener">Maryland Business Express ↗</a><span class="dim"> resident agent, principal office, formation state</span><br>`;
+    return `${reg}
       <a href="https://opencorporates.com/companies?q=${q}" target="_blank" rel="noopener">OpenCorporates ↗</a><span class="dim"> same name across other states' registries</span>`;
   }
 
@@ -1209,7 +1236,7 @@
   fetch("data/meta.json").then((r) => r.json()).then((m) => {
     asOfLabel = m.as_of_label;
     if (asOfLabel) document.getElementById("asof").textContent =
-      `Parcel data: MD iMAP, MDP, SDAT · PG County DPIE · Anne Arundel and Charles County GIS · Ownership as of SDAT, ${asOfLabel}`;
+      `Parcel data: MD iMAP, MDP, SDAT · county GIS (PG, Anne Arundel, Charles) · DC GIS / OTR · Arlington, Alexandria, Fairfax, Prince William, Loudoun and Fauquier GIS · Maryland ownership as of SDAT, ${asOfLabel}`;
   }).catch(() => {});
 
   const limits = document.getElementById("limits");
