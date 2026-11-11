@@ -134,3 +134,5 @@ main{flex:1;min-height:0;position:relative}
   .foot{left:16px;right:16px;flex-wrap:wrap}
   .drawer{top:auto;height:62%;width:100%;border-left:0;border-top:1px solid var(--line);padding:20px 16px 28px}
 }
+.drawer .links{margin-top:10px;line-height:1.55}
+.drawer .links .dim{font-size:11.5px}

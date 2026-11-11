@@ -272,8 +272,21 @@
       </dl>
       <div class="src">
         Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
-        ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">SDAT record ↗</a>` : ""}
+        Only the most recent sale is in the bulk data.
+        <div class="links">
+          ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">SDAT record ↗</a><span class="dim"> needs a free SDAT login</span><br>` : ""}
+          <a href="https://sdat.dat.maryland.gov/RealProperty/Pages/default.aspx" target="_blank" rel="noopener">SDAT public search ↗</a><span class="dim"> Prince George's · district ${esc(d.acct.split("-")[0])} · account ${esc(d.acct.split("-")[1] || "")}. Shows the last 3 transfers.</span><br>
+          ${!d.pv && d.lf ? `<a href="https://mdlandrec.net" target="_blank" rel="noopener">Maryland Land Records ↗</a><span class="dim"> deed liber ${esc(d.lf.split("/")[0])}, folio ${esc(d.lf.split("/")[1])}. Full chain of title.</span><br>` : ""}
+          ${!d.pv && d.o && d.t !== "g" ? entityLinks(d.o) : ""}
+        </div>
       </div>`;
+  }
+
+  // Business-registry lookups for an entity name (opened by the viewer; nothing is fetched by the map).
+  function entityLinks(name) {
+    const q = encodeURIComponent(name);
+    return `<a href="https://egov.maryland.gov/BusinessExpress/EntitySearch" target="_blank" rel="noopener">Maryland Business Express ↗</a><span class="dim"> resident agent, principal office, formation state</span><br>
+      <a href="https://opencorporates.com/companies?q=${q}" target="_blank" rel="noopener">OpenCorporates ↗</a><span class="dim"> same name across other states' registries</span>`;
   }
 
   // ---------- owner group view (hub and spoke; HANDOFF.md section 2) ----------
