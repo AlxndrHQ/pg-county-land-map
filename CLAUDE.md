@@ -28,10 +28,16 @@ The full brief is in [HANDOFF.md](HANDOFF.md). Read it before starting a milesto
 scripts/fetch_parcels.py   page PG County "Property Flattened" layer -> data/raw/pages/ (cached, resumable)
 scripts/build_parcels.py   classify owners, apply privacy rule -> data/build/parcels.geojsonl, web/data/parcels/NNN.json, web/data/search.json, web/data/meta.json
 scripts/fetch_sales.py     MD iMAP Property Sales (rolling 12 months) -> data/history/sales.json (cumulative, committed; never delete)
-scripts/build_tiles.sh     tippecanoe -> web/data/parcels.pmtiles
+scripts/build_tiles.sh     tippecanoe -> web/data/parcels.pmtiles + data/out/<CODE>/parcels.pmtiles
+scripts/fetch_arcgis.py    other jurisdictions (sources.py: MD counties via MD iMAP + county owner tables, DC, VA) -> data/raw/<CODE>/
+scripts/fetch_arlington.py Arlington DataHub API (owner names redacted; latest buyer used for companies only)
+scripts/fetch_sec.py       owner -> SEC public company (exact name or Exhibit 21 subsidiary, cited) -> web/data/companies.json
+                           SEC rules: contact email from gitignored .sec_contact, max 1 request/s, cached, stops on 403/429
+scripts/publish_data.sh    data/out/* -> storage-only Pages repos rem-data-md and rem-data-va (one commit each)
 web/                       static site (MapLibre GL + pmtiles), deployed to GitHub Pages by .github/workflows/pages.yml
 ```
-Rebuild: `python3 scripts/fetch_parcels.py && python3 scripts/fetch_sales.py && python3 scripts/build_parcels.py && scripts/build_tiles.sh`
+Rebuild: `python3 scripts/fetch_parcels.py && python3 scripts/fetch_sales.py && python3 scripts/fetch_arcgis.py <codes> && python3 scripts/fetch_arlington.py && python3 scripts/build_parcels.py && scripts/build_tiles.sh && python3 scripts/fetch_sec.py && scripts/publish_data.sh`, then push this repo.
+Owner-group ids change with every build, so search.json, groups/, companies.json and BOTH data repos must be published together.
 Run fetch_sales.py at least every few months: the state only publishes the last 12 months, and history.json is how older sales are kept.
 Preview: `cd web && python3 -m http.server 8000`. The server must support Range requests for PMTiles; Python's doesn't, so use `npx http-server web -p 8000` instead.
 
