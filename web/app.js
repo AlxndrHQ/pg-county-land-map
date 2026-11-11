@@ -130,6 +130,9 @@
           "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.3, 15, 0.7, 18, 1.2],
           "line-opacity": ["case", ["==", ["get", "t"], "p"], 0.9, 0.95],
         }, filter: typeFilter() }),
+      ...per("pub-fill", { type: "fill", minzoom: PARCEL_MINZOOM, filter: pubFilter(), paint: { "fill-color": P.accentSoft } }),
+      ...per("pub-line", { type: "line", minzoom: PARCEL_MINZOOM, filter: pubFilter(),
+        paint: { "line-color": P.accent, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 2], "line-dasharray": [2, 1] } }),
       ...per("tag-fill", { type: "fill", minzoom: PARCEL_MINZOOM, filter: tagFilter(), paint: { "fill-color": tc, "fill-opacity": 0.16 } }),
       ...per("tag-line", { type: "line", minzoom: PARCEL_MINZOOM, filter: tagFilter(),
         paint: { "line-color": tc, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.9, 16, 1.6] } }),
@@ -184,6 +187,7 @@
       hash: "map", attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false,
     });
     map.touchZoomRotate.disableRotation();
+    map.on("load", () => { if (view.pub) applyPub(); });
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.on("zoom", updateHint);
     updateHint();
@@ -271,6 +275,7 @@
       addProjectControl(id, d);
       addTagControl(id, d);
       addParcelNotes(id, d);
+      if (!d.pv && !d.nn && d.g != null) fillCompany(d.g, id);
       if (opts.fly && d.c && map) map.flyTo({ center: d.c, zoom: Math.max(map.getZoom(), 16.5), padding: drawerPad() });
     }).catch((e) => {
       if (token === reqToken) body.innerHTML = `<div class="lbl">Couldn't load parcel details</div><p class="note">${esc(e.message)}</p>`;
@@ -348,6 +353,7 @@
         ${row("Zoning", d.z && `<span class="num">${esc(d.z)}</span>`)}
         ${row("Built", d.yb && `<span class="num">${esc(d.yb)}</span>`)}
       </dl>
+      <div id="co-slot"></div>
       <div id="pnote-slot"></div>
       <div class="src">
         ${reg ? esc(reg.src) + "." : `Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
@@ -418,11 +424,13 @@
         <h2>${esc(g.l)}</h2>
         <p class="addr">${plural(n, "parcel")} · ${acres(g.ac)} · assessed ${usd(g.tv)}</p>
         ${ww}${alias}${why}${members}
+        <div id="co-slot"></div>
         <div class="lbl sec">Parcels</div>
         <ul class="plist">${list}</ul>
         ${n > 300 ? `<p class="addr">Showing 300 of ${n.toLocaleString("en-US")}. All are highlighted on the map.</p>` : ""}`;
       body.querySelectorAll(".plist button").forEach((b) => b.addEventListener("click", () =>
         select(b.dataset.id, { fly: true, back: `<button type="button" class="back linkish">← ${esc(g.l)}</button>` })));
+      fillCompany(gid);
       const bb = g.b;
       if (map) map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: drawerPad(), maxZoom: 17 });
     });
@@ -446,6 +454,57 @@
         <span class="sub">${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.n, "parcel")} · ${acres(g.ac)}</span></dd>`;
       slot.querySelector(".grp-link").addEventListener("click", () => showGroup(d.g));
     }).catch(() => slot.remove());
+  }
+
+  // ---------- credit and equity for owners that are (subsidiaries of) public companies ----------
+  // data/companies.json is built by scripts/fetch_sec.py from SEC filings: owner group -> company (CIK),
+  // with shares outstanding, public float, total debt, interest expense. Linked by exact name, or by the
+  // company's own subsidiary list (Exhibit 21), which is cited.
+  let companiesP = null;
+  const loadCompanies = () => companiesP || (companiesP = fetch("data/companies.json").then((r) => r.json())
+    .catch((e) => { companiesP = null; throw e; }));
+  const big = (v) => v == null ? null : Math.abs(v) >= 1e9 ? "$" + (v / 1e9).toFixed(v >= 1e11 ? 0 : 2) + "B"
+    : Math.abs(v) >= 1e6 ? "$" + (v / 1e6).toFixed(1) + "M" : usd(v);
+  const qdate = (s) => s ? new Date(s + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+  // Same normalization as key() in fetch_sec.py: suffixes and punctuation don't matter.
+  const DROP_WORDS = new Set(["INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LLC", "L", "C", "LP", "LTD",
+    "LIMITED", "PLC", "THE", "NV", "SA", "AG", "DE", "MD", "VA", "DC", "NEW"]);
+  const coKey = (s) => String(s || "").toUpperCase().replace(/&/g, " AND ").replace(/\/[A-Z]{2,3}\/?/g, " ")
+    .replace(/[^A-Z0-9]+/g, " ").split(" ").filter((t) => t && !DROP_WORDS.has(t)).join(" ");
+  // ownerName: on a parcel, the company shows only when this parcel's own owner is the linked name
+  // (owner groups are leads; a group can hold unrelated entities that share a manager's address).
+  function fillCompany(gid, parcelId) {
+    const slot = body.querySelector("#co-slot");
+    if (!slot) return;
+    loadCompanies().then((C) => {
+      const cik = C.g[String(gid)];
+      if (!cik || !document.contains(slot)) return;
+      const c = C.co[cik], via = C.via[String(gid)] || {};
+      if (parcelId && !(C.ids[String(gid)] || []).includes(parcelId)) return;
+      const quote = c.ticker ? `https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}` : null;
+      const r = (k, v, sub) => v == null ? "" : `<div><dt>${k}</dt><dd><span class="num">${v}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</dd></div>`;
+      const link = via.sources ? `Linked through the company's subsidiary list: ${via.sources.map((x) =>
+        `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)} ↗</a>`).join("; ")}.`
+        : `Linked by the owner name “${esc(via.via || "")}” matching the SEC registrant name.`;
+      const scope = parcelId ? "" : ` Applies to parcels owned by “${esc(via.via || "")}”, not necessarily every entity in this group.`;
+      slot.innerHTML = `
+        <div class="lbl sec">Public company</div>
+        <p class="coname">${esc(c.name)}${c.ticker ? ` <span class="num tick">${esc(c.ticker)}${c.exchange ? " · " + esc(c.exchange) : ""}</span>` : ""}</p>
+        <dl class="codl">
+          <div class="cohead"><span class="lbl">Equity</span></div>
+          ${r("Shares out", c.shares != null ? Math.round(c.shares).toLocaleString("en-US") : null, c.shares_date && "as of " + qdate(c.shares_date))}
+          ${r("Public float", big(c.float), c.float_date && "market value held by the public, " + qdate(c.float_date))}
+          ${quote ? `<div><dt>Price</dt><dd><a href="${quote}" target="_blank" rel="noopener">Today's quote and market cap ↗</a></dd></div>` : ""}
+          <div class="cohead"><span class="lbl">Credit</span></div>
+          ${r("Total debt", big(c.debt), c.debt_date && "as of " + qdate(c.debt_date))}
+          ${r("Due in a year", big(c.debt_current), null)}
+          ${r("Interest paid", big(c.interest), c.interest_period && "fiscal year to " + qdate(c.interest_period))}
+          ${r("Avg. rate", c.rate != null ? c.rate.toFixed(2) + "%" : null, "interest ÷ debt, an estimate")}
+          ${c.debt == null && c.interest == null ? `<div><dt>Debt</dt><dd>Not tagged in recent SEC filings</dd></div>` : ""}
+        </dl>
+        <p class="note">${link}${scope} Figures from the company's latest SEC filings (<a href="${esc(c.links.filings)}" target="_blank" rel="noopener">filings ↗</a>).
+          Bond-by-bond data isn't included yet.</p>`;
+    }).catch(() => {});
   }
 
   // ---------- search: entity owners, addresses, ZIPs, cities, account numbers ----------
@@ -954,6 +1013,16 @@
     e.push(P.accent);
     return e;
   }
+  let pubIds = [];
+  function pubFilter() { return ["in", ["get", "id"], ["literal", view.pub ? pubIds : []]]; }
+  function applyPub() {
+    if (view.pub && !pubIds.length) {
+      loadCompanies().then((C) => { pubIds = Object.values(C.ids).flat(); applyPub(); renderLegend(); }).catch(() => {});
+      return;
+    }
+    eachLayer("pub-fill", (id) => map.setFilter(id, pubFilter()));
+    eachLayer("pub-line", (id) => map.setFilter(id, pubFilter()));
+  }
   function tagFilter() { return ["in", ["get", "id"], ["literal", [...idColor().keys()]]]; }
   function typeFilter() { return view.hide.length ? ["!", ["in", ["get", "t"], ["literal", view.hide]]] : ["has", "id"]; }
   function tagDotsData(P) {
@@ -1091,7 +1160,8 @@
       ${types.map(([k, v]) => `<button type="button" class="key" data-type="${k}" aria-pressed="${!view.hide.includes(k)}" title="Show or hide on the map"><i style="--c:var(${v})"></i>${TYPE_LABEL[k]}</button>`).join("")}
       ${tags.length ? `<span class="lbl tagslbl">Your tags</span>
         ${tags.map((t) => `<span class="key tagkey"><button type="button" class="vis" data-vis="${t.id}" aria-pressed="${t.on}" aria-label="Show or hide ${esc(t.name)}"><i class="dot" style="background:${P.tag[t.color]}"></i></button><button type="button" class="tname" data-tag="${t.id}">${esc(t.name)} <span class="num dim">${counts.get(t.id)}</span></button></span>`).join("")}
-        <button type="button" class="key mute" aria-pressed="${view.mute}">Fade untagged parcels</button>` : ""}`;
+        <button type="button" class="key mute" aria-pressed="${view.mute}">Fade untagged parcels</button>` : ""}
+      <button type="button" class="key mute pub" aria-pressed="${!!view.pub}" title="Parcels owned by SEC-registered public companies or their listed subsidiaries">Public companies${view.pub && pubIds.length ? ` <span class="num">${pubIds.length}</span>` : ""}</button>`;
     legend.querySelectorAll("[data-type]").forEach((b) => b.addEventListener("click", () => {
       const k = b.dataset.type;
       view.hide = view.hide.includes(k) ? view.hide.filter((x) => x !== k) : [...view.hide, k];
@@ -1101,7 +1171,8 @@
       const t = tags.find((x) => x.id === b.dataset.vis); t.on = !t.on; saveTags();
     }));
     legend.querySelectorAll("[data-tag]").forEach((b) => b.addEventListener("click", () => showTag(b.dataset.tag)));
-    const m = legend.querySelector(".mute"); if (m) m.addEventListener("click", () => { view.mute = !view.mute; saveTags(); });
+    const m = legend.querySelector(".mute:not(.pub)"); if (m) m.addEventListener("click", () => { view.mute = !view.mute; saveTags(); });
+    legend.querySelector(".pub").addEventListener("click", () => { view.pub = !view.pub; saveTags(); applyPub(); });
   }
   renderLegend();
 
