@@ -628,7 +628,10 @@
   // sent under that project's name) and remembers the parcel it is about.
   const noteWhen = (n) => new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const answersHtml = (n) => (n.answers || []).map((a) => `<span class="nans">↳ ${esc(a)}</span>`).join("");
-  const noteStatus = (n) => (n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only");
+  const isQuestionText = (t) => /\?|^\s*(who|what|why|how|when|where|which|is|are|does|do|did|can|could|should|was|were|has|have)\b/i.test(t || "");
+  const noteStatus = (n) => n.sent && !(n.answers || []).length && isQuestionText(n.text) && Date.now() - Date.parse(n.at) < 15 * 60000
+    ? "in Google Doc · answer on the way" : noteStatus0(n);
+  const noteStatus0 = (n) => (n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only");
   function addParcelNotes(id, d) {
     const slot = body.querySelector("#pnote-slot");
     if (!slot) return;
@@ -1014,11 +1017,11 @@
   async function syncPending() {
     if (syncing || !syncCfg.url || !syncCfg.key) return;
     syncing = true;
-    let sent = 0, failed = null;
+    let sent = 0, failed = null, sentQuestion = false;
     try {
       for (const p of projects) for (const n of p.log || []) {
         if (n.sent) continue;
-        try { await sendNote(p, n); n.sent = true; sent++; saveProjects(); }
+        try { await sendNote(p, n); n.sent = true; sent++; if (isQuestionText(n.text)) sentQuestion = true; saveProjects(); }
         catch (e) { failed = e; break; }
       }
     } finally { syncing = false; }
@@ -1026,6 +1029,10 @@
     else if (sent) toast(sent === 1 ? "Note sent to Google Docs." : `${sent} notes sent to Google Docs.`);
     if (sent && refreshNotes && !drawer.hidden) refreshNotes();
     fetchAnswers();
+    if (sentQuestion) {               // the doc's script answers questions within a minute or two; look again then
+      setTimeout(() => fetchAnswers(true), 45000);
+      setTimeout(() => fetchAnswers(true), 120000);
+    }
   }
   // Answers written under a note in the doc ("↳ Answer (Claude): …") come back here and show under the note.
   // Notes are matched by their minute (New York time, as the doc heading shows it) and their text.

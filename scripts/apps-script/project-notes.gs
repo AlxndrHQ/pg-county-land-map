@@ -18,6 +18,17 @@
  * Answers: write an answer as a paragraph under the note that starts with "↳" or "Answer"
  * (e.g. "↳ Answer (Claude): ..."). The map reads them back and shows them under the note.
  *
+ * Automatic answers (optional, free): questions get answered by Gemini with Google Search
+ * a minute or so after you post them.
+ *   1. Get a free key at https://aistudio.google.com/apikey (Create API key).
+ *   2. Here: Project Settings (gear) › Script Properties › Add property
+ *        GEMINI_API_KEY = <your key>   › Save.
+ *   3. Choose "setupAnswers" in the toolbar, Run, approve the new permissions
+ *      (it now also needs to reach the internet and schedule a short job).
+ *   4. Deploy a new version (below).
+ * A note counts as a question if it has a "?" or starts with who/what/why/how/etc.
+ * Answers start "↳ Answer (Gemini):" and list their sources; treat them as leads to check.
+ *
  * Updating: paste the new version over Code.gs, save, then Deploy › Manage deployments ›
  * Edit (pencil) › Version: New version › Deploy. The URL and key stay the same; don't run
  * setup() again unless you want a new key.
@@ -108,7 +119,145 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+  if (isQuestion_(text) && geminiKey_()) scheduleAnswers_();
   return json_({ ok: true });
+}
+
+// ---------- automatic answers (Gemini + Google Search) ----------
+const QUESTION = /\?|^\s*(who|what|why|how|when|where|which|is|are|does|do|did|can|could|should|was|were|has|have)\b/i;
+const MAX_PER_RUN = 3;
+const SYSTEM = [
+  'You answer research questions about land ownership in Prince George\'s County, Maryland, for a private research map.',
+  'Search the web. Answer in 2 to 5 plain sentences, no markdown, no lists.',
+  'Keep facts separate from inference: say "SDAT lists..." or "reporting says..." for facts, and "likely" or "probably" for inferences.',
+  'Name a source for every factual claim (outlet or agency name in the text). If you cannot find a reliable answer, say what is unknown and what record to check next (deed, LLC filing on Maryland Business Express, SDAT).',
+  'Never name, describe or speculate about a private individual homeowner. People who are public figures, executives or developers acting in business are fine.',
+].join(' ');
+
+function isQuestion_(t) { return QUESTION.test(String(t || '')); }
+function geminiKey_() { return PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY'); }
+
+/** Run once from the editor after adding GEMINI_API_KEY: approves permissions and picks a model. */
+function setupAnswers() {
+  if (!geminiKey_()) throw new Error('Add GEMINI_API_KEY under Project Settings › Script Properties first.');
+  PropertiesService.getScriptProperties().deleteProperty('GEMINI_MODEL');
+  Logger.log('Using model: ' + model_());
+  scheduleAnswers_(); ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'answerPending') ScriptApp.deleteTrigger(t);
+  });
+  Logger.log('Automatic answers are on. Deploy a new version of the web app.');
+}
+
+/** A one-off job a few seconds out, so posting a note returns right away. */
+function scheduleAnswers_() {
+  const busy = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'answerPending'; });
+  if (!busy) ScriptApp.newTrigger('answerPending').timeBased().after(5 * 1000).create();
+}
+
+/** Answers questions under the marker that have no "↳ Answer" yet. */
+function answerPending() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'answerPending') ScriptApp.deleteTrigger(t);
+  });
+  const props = PropertiesService.getScriptProperties();
+  for (let n = 0; n < MAX_PER_RUN; n++) {
+    const lock = LockService.getScriptLock(); lock.waitLock(30000);
+    let job;
+    try { job = nextQuestion_(openDoc_().getBody(), props); } finally { lock.releaseLock(); }
+    if (!job) return;
+    const tries = Number(props.getProperty(job.tag) || 0) + 1;
+    props.setProperty(job.tag, String(tries));
+    let ans;
+    try { ans = askGemini_(job); } catch (err) { Logger.log('Gemini failed: ' + err.message); if (tries < 2) scheduleAnswers_(); return; }
+    lock.waitLock(30000);
+    try {
+      const doc = openDoc_(), body = doc.getBody();
+      const again = nextQuestion_(body, props, job.tag);   // re-find it: the doc may have changed meanwhile
+      if (again) insertAnswer_(body, again.after, ans);
+      doc.saveAndClose();
+    } finally { lock.releaseLock(); }
+  }
+}
+
+/** The newest unanswered question (or the one with this tag), with the index of its last text paragraph. */
+function nextQuestion_(body, props, wantTag) {
+  let cur = null, started = false;
+  const found = [];
+  for (let k = 0; k < body.getNumChildren(); k++) {
+    const el = body.getChild(k), type = el.getType();
+    if (type !== DocumentApp.ElementType.PARAGRAPH && type !== DocumentApp.ElementType.LIST_ITEM) continue;
+    const text = el.asText().getText().trim();
+    if (!started) { started = text === MARKER; continue; }
+    if (type === DocumentApp.ElementType.PARAGRAPH && el.asParagraph().getHeading() === DocumentApp.ParagraphHeading.HEADING3) {
+      cur = { head: text, text: [], answered: false, after: k, parcels: [] }; found.push(cur); continue;
+    }
+    if (!cur || !text) continue;
+    if (type === DocumentApp.ElementType.LIST_ITEM) { cur.parcels.push(text); continue; }
+    if (ANSWER.test(text)) { cur.answered = true; continue; }
+    if (!cur.parcels.length) { cur.text.push(text); cur.after = k; }
+  }
+  for (const q of found) {
+    const qt = q.text.join('\n');
+    q.tag = 'tried_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, q.head + '|' + qt)).slice(0, 16);
+    if (wantTag) { if (q.tag === wantTag) return q; continue; }
+    if (!q.answered && qt && isQuestion_(qt) && Number(props.getProperty(q.tag) || 0) < 2) { q.question = qt; return q; }
+  }
+  return null;
+}
+
+function model_() {
+  const props = PropertiesService.getScriptProperties();
+  let m = props.getProperty('GEMINI_MODEL');
+  if (m) return m;
+  // pick the newest "flash" model that can generate text, so the script survives model retirements
+  const r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+    { headers: { 'x-goog-api-key': geminiKey_() }, muteHttpExceptions: true });
+  if (r.getResponseCode() !== 200) throw new Error('Gemini key rejected: ' + r.getContentText().slice(0, 200));
+  const names = (JSON.parse(r.getContentText()).models || [])
+    .filter(function (x) { return (x.supportedGenerationMethods || []).indexOf('generateContent') >= 0; })
+    .map(function (x) { return x.name.replace(/^models\//, ''); })
+    .filter(function (n) { return /^gemini-[\d.]+-flash$/.test(n); })
+    .sort(function (a, b) { return parseFloat(b.split('-')[1]) - parseFloat(a.split('-')[1]); });
+  m = names[0] || 'gemini-2.5-flash';
+  props.setProperty('GEMINI_MODEL', m);
+  return m;
+}
+
+function askGemini_(q) {
+  const ctx = q.head + (q.parcels.length ? '\nParcels it is about: ' + q.parcels.join('; ') : '');
+  const r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model_() + ':generateContent', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'x-goog-api-key': geminiKey_() },
+    payload: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM }] },
+      contents: [{ role: 'user', parts: [{ text: 'Note heading: ' + ctx + '\nQuestion: ' + q.question }] }],
+      tools: [{ google_search: {} }],
+    }),
+  });
+  if (r.getResponseCode() !== 200) throw new Error('HTTP ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 300));
+  const c = (JSON.parse(r.getContentText()).candidates || [])[0] || {};
+  const text = ((c.content && c.content.parts) || []).map(function (p) { return p.text || ''; }).join('').replace(/\s+/g, ' ').trim();
+  if (!text) throw new Error('empty answer');
+  const seen = {}, sources = [];
+  (((c.groundingMetadata || {}).groundingChunks) || []).forEach(function (g) {
+    if (g.web && g.web.uri && !seen[g.web.title || g.web.uri] && sources.length < 5) {
+      seen[g.web.title || g.web.uri] = 1; sources.push({ title: g.web.title || 'source', url: g.web.uri });
+    }
+  });
+  return { text: text.slice(0, 2500), sources: sources };
+}
+
+function insertAnswer_(body, after, ans) {
+  const label = '↳ Answer (Gemini): ';
+  const srcText = ans.sources.length ? ' Sources: ' + ans.sources.map(function (s) { return s.title; }).join(', ') + '.' : ' (No sources returned; treat as unverified.)';
+  const para = body.insertParagraph(after + 1, label + ans.text + srcText).setHeading(DocumentApp.ParagraphHeading.NORMAL);
+  para.setIndentStart(18).setIndentFirstLine(18).setSpacingBefore(4);
+  const t = para.editAsText();
+  t.setBold(false).setItalic(false).setBold(0, label.length - 2, true);
+  let pos = (label + ans.text + ' Sources: ').length;
+  ans.sources.forEach(function (s) {
+    if (ans.sources.length) { t.setLinkUrl(pos, pos + s.title.length - 1, s.url); pos += s.title.length + 2; }
+  });
 }
 
 function keyOk_(k) {
