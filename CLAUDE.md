@@ -1,5 +1,13 @@
 # Real Estate Map — PG County land ownership map
 
+## Shared context (read first)
+This project's current state and decision log live in Google Drive, shared with Gemini:
+**AI Collaboration › Claude Projects › Real Estate Map**
+- **Real Estate Map · Summary**: what it is, links, current state, open items. Read before working; rewrite it in place when the state changes.
+- **Real Estate Map · Decisions**: newest-first log of what was decided and why. Add an entry (date · decision, then Why / Rejected / Revisit if / Decided by) whenever something is decided; never edit old entries.
+- **Discussions/** and **Assets/** in that folder hold research, chat exports and files.
+The folder's "00 Index" explains the system. Code stays here and on GitHub; the "why" lives in Drive.
+
 The full brief is in [HANDOFF.md](HANDOFF.md). Read it before starting a milestone. These rules always apply:
 
 ## Non-negotiables
