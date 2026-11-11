@@ -596,7 +596,6 @@
         <form class="noteform pnote">
           <textarea name="t" rows="2" placeholder="Write a note or a question about this parcel…" aria-label="New note"></textarea>
           <div class="noterow">
-            <select name="k" aria-label="Type"><option value="note">Note</option><option value="question">Question</option></select>
             <select name="p" aria-label="Project">
               ${inN.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
               ${rest.map((p) => `<option value="${p.id}">${esc(p.name)} (adds parcel)</option>`).join("")}
@@ -607,7 +606,7 @@
           <span class="syncstat">${syncCfg.url ? "Sends to your Project Notes doc" : `Saved in this browser · <button type="button" class="linkish" data-sync>Connect Google Doc</button>`}</span>
         </form>
         ${notes.length ? `<ul class="nlog">${notes.map((n) => `
-          <li><span class="sub">${esc(noteWhen(n))} · ${n.kind === "question" ? "Question" : "Note"} · ${esc(n.pname)} · ${noteStatus(n)}</span>
+          <li><span class="sub">${esc(noteWhen(n))} · ${esc(n.pname)} · ${noteStatus(n)}</span>
             <span class="ntext">${esc(n.text)}</span></li>`).join("")}</ul>` : ""}`;
       const f = slot.querySelector("form");
       f.t.value = keep;
@@ -621,7 +620,7 @@
         }
         if (!p.ids.includes(id)) p.ids = [...p.ids, id];
         p.log = p.log || [];
-        p.log.push({ id: newId(), at: new Date().toISOString(), kind: f.k.value, text, sent: false, pid: id, pl: label });
+        p.log.push({ id: newId(), at: new Date().toISOString(), kind: "note", text, sent: false, pid: id, pl: label });
         touch(p); paint(); addProjectControl(id, d); syncPending();
       };
       f.addEventListener("submit", (e) => { e.preventDefault(); add(); });
@@ -671,7 +670,6 @@
         <form class="noteform" data-p="${p.id}">
           <textarea name="t" rows="3" placeholder="Write a note or a question about this project…" aria-label="New note"></textarea>
           <div class="noterow">
-            <select name="k" aria-label="Type"><option value="note">Note</option><option value="question">Question</option></select>
             <button class="linkish" type="submit">Add</button>
             <span class="syncstat">${syncCfg.url
               ? `Sends to ${syncCfg.doc ? `<a href="${esc(syncCfg.doc)}" target="_blank" rel="noopener">Project Notes ↗</a>` : "your Project Notes doc"}`
@@ -681,7 +679,7 @@
         ${syncCfg.url ? "" : `<div class="synccta"><span>Send these notes to your Google Doc automatically.</span>
           <button type="button" class="linkish" data-sync>Set it up (one time, about 3 min) →</button></div>`}
         <ul class="nlog">${(p.log || []).slice().reverse().map((n) => `
-          <li><span class="sub">${esc(noteWhen(n))} · ${n.kind === "question" ? "Question" : "Note"}${n.pl ? " · " + esc(n.pl) : ""} · ${noteStatus(n)}</span>
+          <li><span class="sub">${esc(noteWhen(n))}${n.pl ? " · " + esc(n.pl) : ""} · ${noteStatus(n)}</span>
             <span class="ntext">${esc(n.text)}</span></li>`).join("")}</ul>
         <div class="lbl sec">Research doc</div>
         <div class="pdoc"><input class="pdocin" placeholder="Paste a Google Doc link" value="${esc(doc)}"> ${docLink}</div>
@@ -699,7 +697,7 @@
       const addNote = () => {
         const text = nf.t.value.trim(); if (!text) return;
         p.log = p.log || [];
-        p.log.push({ id: newId(), at: new Date().toISOString(), kind: nf.k.value, text, sent: false });
+        p.log.push({ id: newId(), at: new Date().toISOString(), kind: "note", text, sent: false });
         touch(p); showProject(p.id); syncPending();
       };
       nf.addEventListener("submit", (e) => { e.preventDefault(); addNote(); });
