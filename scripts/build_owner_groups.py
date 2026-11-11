@@ -99,7 +99,11 @@ def name_key(name):
     s = re.sub(r"\bL L C\b", "LLC", s)
     s = re.sub(r"\b(THE)\b", "", s)
     s = re.sub(r"\((TX|RE|LEASED)\)", "", s)
-    return " ".join(s.split())
+    # Same company, different spelling of the legal suffix: "COSTCO WHOLESALE CORPORATION" = "... CORP".
+    for long, short in (("CORPORATION", "CORP"), ("INCORPORATED", "INC"), ("COMPANY", "CO"), ("LIMITED", "LTD")):
+        s = re.sub(rf"\b{long}\b", short, s)
+    s = re.sub(r"\b(INC|CORP|CO|LTD)$", r"\1", s)
+    return " ".join(s.replace(",", " ").split())
 
 
 class DSU:

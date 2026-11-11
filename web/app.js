@@ -390,9 +390,8 @@
   }
 
   function showGroup(gid) {
-    loadIndex().then((d) => {
-      const g = d.groups[gid];
-      if (!g) return;
+    loadGroup(gid).then((g) => {
+      if (!g || !g.ids) return;
       lastGroup = gid;
       reqToken++;
       const n = g.ids.length, multi = g.m.length > 1;
@@ -412,8 +411,8 @@
       const members = multi ? `
         <div class="lbl sec">${plural(g.m.length, "entity")} of record</div>
         <ul class="mlist">${g.m.map(([nm, c]) => `<li><span>${esc(nm)}</span><span class="num dim">${c}</span></li>`).join("")}</ul>` : "";
-      const list = g.ids.slice(0, 300).map((id) =>
-        `<li><button type="button" data-id="${esc(id)}">${esc(addrById.get(id) || "Account " + id)}</button></li>`).join("");
+      const list = g.ids.slice(0, 300).map((id, i) =>
+        `<li><button type="button" data-id="${esc(id)}">${esc(g.as[i] || "Account " + id)}</button></li>`).join("");
       body.innerHTML = `
         <span class="lbl type" style="--c:${P.t[g.t] || P.edgeStrong}"><i></i>${multi ? "Owner group · " : ""}${esc(TYPE_LABEL[g.t] || "Owner")}</span>
         <h2>${esc(g.l)}</h2>
@@ -442,9 +441,9 @@
       const g = idx.groups[d.g];
       if (!g || !body.contains(slot)) return;
       const multi = g.m.length > 1;
-      if (!multi && g.ids.length < 2) { slot.remove(); return; }
+      if (!multi && g.n < 2) { slot.remove(); return; }
       slot.innerHTML = `<dt>${multi ? "Owner group" : "Same owner"}</dt><dd><button type="button" class="linkish grp-link">${esc(g.l)}</button>
-        <span class="sub">${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.ids.length, "parcel")} · ${acres(g.ac)}</span></dd>`;
+        <span class="sub">${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.n, "parcel")} · ${acres(g.ac)}</span></dd>`;
       slot.querySelector(".grp-link").addEventListener("click", () => showGroup(d.g));
     }).catch(() => slot.remove());
   }
@@ -453,17 +452,38 @@
   const input = document.getElementById("q");
   const results = document.getElementById("results");
   let indexP = null;
-  const addrById = new Map();
+  // The index is split (see build_parcels.py): a compact core here, each group's parcels in
+  // data/groups/NNN.json (loadGroup), and addresses in data/addrs.json (loadAddrs, address searches only).
   function loadIndex() {
     if (!indexP) indexP = fetch("data/search.json").then((r) => r.json()).then((d) => {
-      for (const [a, id] of d.addrs) addrById.set(id, a);
+      d.groups = d.groups.map(([l, t, ac, tv, b, n, m, ls, al]) =>
+        ({ l, t, ac, tv, b, n, m: m || [[l, n]], ls, ...(al ? { al } : {}) }));
       // haystack: group label + every entity name in the group
       d.groupsU = d.groups.map((g) => (g.l + "\n" + g.m.map((m) => m[0]).join("\n")).toUpperCase());
-      d.addrsU = d.addrs.map((a) => a[0].toUpperCase());
       d.placesU = d.places.map((p) => p[0].toUpperCase());
       return d;
     }).catch((e) => { indexP = null; throw e; });
     return indexP;
+  }
+  const groupChunks = new Map();
+  // Adds ids, pts, ev and as (addresses) to the group's record and resolves to it.
+  function loadGroup(gid) {
+    const k = String(Math.floor(gid / 100)).padStart(3, "0");
+    if (!groupChunks.has(k)) groupChunks.set(k, fetch(`data/groups/${k}.json`).then((r) => {
+      if (!r.ok) throw new Error("group file " + k);
+      return r.json();
+    }).catch((e) => { groupChunks.delete(k); throw e; }));
+    return Promise.all([loadIndex(), groupChunks.get(k)]).then(([d, chunk]) => {
+      const g = d.groups[gid], x = chunk[gid];
+      if (g && x && !g.ids) Object.assign(g, { ids: x[0], pts: x[1], ev: x[2], as: x[3] });
+      return g;
+    });
+  }
+  let addrsP = null;
+  function loadAddrs() {
+    if (!addrsP) addrsP = fetch("data/addrs.json").then((r) => r.json()).then((a) => ({ a, u: a.map((x) => x[0].toUpperCase()) }))
+      .catch((e) => { addrsP = null; throw e; });
+    return addrsP;
   }
   input.addEventListener("focus", () => loadIndex().catch(() => {}));
 
@@ -523,9 +543,12 @@
     [...pref, ...rest].slice(0, 8).forEach((i) => items.push({ kind: "owner", gid: i, g: d.groups[i], q }));
 
     if (/\d/.test(q) || items.length < 6) {
+      let ad = null;
+      try { ad = await loadAddrs(); } catch (e) {}
+      if (input.value.trim() !== raw) return;          // typed on while the address file loaded
       let n = 0;
-      for (let i = 0; i < d.addrsU.length && n < 6; i++) {
-        if (hasAll(d.addrsU[i])) { items.push({ kind: "addr", a: d.addrs[i] }); n++; }
+      for (let i = 0; ad && i < ad.u.length && n < 6; i++) {
+        if (hasAll(ad.u[i])) { items.push({ kind: "addr", a: ad.a[i] }); n++; }
       }
     }
     const geoQ = raw.length >= 3 && !items.some((it) => it.kind === "acct") ? raw : null;
@@ -573,7 +596,7 @@
         // when the hit is a member name, say which one
         const via = multi && !g.l.toUpperCase().includes(it.q) ? g.m.find(([nm]) => nm.toUpperCase().includes(it.q)) : null;
         main = esc(g.l) + (via ? `<span class="via">via ${esc(via[0])}</span>` : "");
-        sub = `${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.ids.length, "parcel")} · ${acres(g.ac)}`;
+        sub = `${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.n, "parcel")} · ${acres(g.ac)}`;
       }
       else if (it.kind === "geo") { main = esc(it.h.name); sub = esc(it.h.sub); }
       else main = esc(it.a[0]);
@@ -708,8 +731,8 @@
     if (!slot) return;
     const label = d.a || "Account " + d.acct;
     let owner = new Set([id]);               // this parcel, plus the owner group's parcels once the index loads
-    if (!d.pv && d.g != null) loadIndex().then((idx) => {
-      const g = idx.groups[d.g]; if (g && g.ids.length > 1) { owner = new Set(g.ids); paint(slot.querySelector("textarea") ? slot.querySelector("textarea").value : ""); }
+    if (!d.pv && d.g != null) loadGroup(d.g).then((g) => {
+      if (g && g.ids && g.ids.length > 1) { owner = new Set(g.ids); paint(slot.querySelector("textarea") ? slot.querySelector("textarea").value : ""); }
     }).catch(() => {});
     const paint = (keep = "") => {
       if (!document.contains(slot)) return;
@@ -784,7 +807,9 @@
     const token = reqToken;
     drawer.hidden = false;
     body.innerHTML = `<div class="lbl">Loading project…</div>`;
-    Promise.all([loadMany(p.ids), loadIndex().catch(() => null)]).then(([rows, idx]) => {
+    Promise.all([loadMany(p.ids), loadIndex().catch(() => null)]).then(async ([rows, idx]) => {
+      if (idx) await Promise.all([...new Set(rows.filter(([, d]) => d && !d.pv && d.g != null).map(([, d]) => d.g))]
+        .map((gid) => loadGroup(gid).catch(() => null)));
       if (token !== reqToken) return;
       const ok = rows.filter(([, d]) => d);
       const pts = ok.flatMap(([, d]) => d.c || []);
@@ -797,8 +822,8 @@
         const key = g ? "g" + d.g : "p" + id;
         if (!secs.has(key)) secs.set(key, {
           key, gid: g ? d.g : null, label: g ? g.l : d.pv ? "Individually owned" : d.o || "Owner",
-          sub: g ? `${g.m.length > 1 ? plural(g.m.length, "entity") + " · " : ""}${plural(g.ids.length, "parcel")} in the county` : "",
-          rows: [], match: new Set(g ? g.ids : [id]), notes: [], last: "" });
+          sub: g ? `${g.m.length > 1 ? plural(g.m.length, "entity") + " · " : ""}${plural(g.n, "parcel")} in the region` : "",
+          rows: [], match: new Set(g && g.ids ? g.ids : [id]), notes: [], last: "" });
         secs.get(key).rows.push([id, d]);
       }
       const general = [];
@@ -957,7 +982,7 @@
 
   // What a tag applied from this parcel covers: the owner's group, or just this parcel.
   function tagTarget(id, d, idx) {
-    const g = !d.pv && d.g != null && idx ? idx.groups[d.g] : null;
+    const g = !d.pv && d.g != null && idx && idx.groups[d.g] && idx.groups[d.g].ids ? idx.groups[d.g] : null;
     if (g) return { k: "g", label: g.l, ids: g.ids, pts: g.pts, ac: g.ac };
     return { k: "p", label: d.a || "Account " + d.acct, ids: [id], pts: d.c || [], ac: d.ac || 0 };
   }
@@ -966,7 +991,8 @@
   function addTagControl(id, d) {
     const slot = body.querySelector("#tag-slot");
     if (!slot) return;
-    loadIndex().catch(() => null).then((idx) => {
+    loadIndex().catch(() => null).then(async (idx) => {
+      if (idx && !d.pv && d.g != null) await loadGroup(d.g).catch(() => null);
       if (!document.contains(slot)) return;
       const target = tagTarget(id, d, idx);
       const P = PAL[theme()];

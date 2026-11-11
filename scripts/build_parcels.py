@@ -631,21 +631,37 @@ def main():
     for (code, key), recs in shards.items():
         (dirs[code] / f"{key}.json").write_text(json.dumps(recs, separators=(",", ":")))
 
+    # Search index, split so the first search stays light (2026-11-11):
+    #   search.json        core: one compact row per owner group + places
+    #                      group row = [label, type, acres, assessed, bbox, parcel count, members or 0, label source, alias or 0]
+    #                      (members = [[name, parcels], ...]; 0 when the only member is the label itself)
+    #   groups/NNN.json    {gid: [ids, points, evidence, addresses]} for gid // 100 == NNN, fetched when a group is opened
+    #   addrs.json         [[address, id], ...], fetched only for address searches
+    GROUPS = WEB_DATA / "groups"
+    GROUPS.mkdir(exist_ok=True)
+    for old in GROUPS.glob("*.json"):
+        old.unlink()
+    rows, chunks = [], {}
+    addr_of = {pid: a for a, pid in addrs}
+    for gid, g in enumerate(groups):
+        only_label = len(g["members"]) == 1 and g["members"][0][0] == g["label"]
+        rows.append([g["label"], g["t"], g["ac"], g["tv"], bbox(g["pts"]), len(g["ids"]),
+                     0 if only_label else g["members"], g["label_src"], g.get("alias") or 0])
+        chunks.setdefault(gid // 100, {})[gid] = [g["ids"], [round(v, 4) for pt in g["pts"] for v in pt], g["evidence"],
+                                                  [addr_of.get(i, "") for i in g["ids"]]]
+    for k, v in chunks.items():
+        (GROUPS / f"{k:03d}.json").write_text(json.dumps(v, separators=(",", ":")))
     search = {
-        # index in this list == the "g" id stored on each parcel detail record
-        "groups": [{
-            "l": g["label"], "ls": g["label_src"], "t": g["t"], "ac": g["ac"], "tv": g["tv"],
-            "b": bbox(g["pts"]), "ids": g["ids"], "pts": [round(v, 4) for pt in g["pts"] for v in pt],
-            "m": g["members"], "ev": g["evidence"], **({"al": g["alias"]} if "alias" in g else {}),
-        } for g in groups],
-        "addrs": addrs,
+        "v": 2,
+        "groups": rows,
         # [label, kind, parcel count, bbox]  (trim 2% outliers: stray geocodes)
         "places": sorted(([label, kind, len(pts), bbox(pts, 0.02)]
                           for (kind, label), pts in places.items() if len(pts) >= 20),
                          key=lambda r: -r[2]),
     }
     (WEB_DATA / "search.json").write_text(json.dumps(search, separators=(",", ":")))
-    print(f"search: {len(search['groups'])} owner groups, {len(addrs)} addresses, {len(search['places'])} places")
+    (WEB_DATA / "addrs.json").write_text(json.dumps(addrs, separators=(",", ":")))
+    print(f"search: {len(rows)} owner groups, {len(addrs)} addresses, {len(search['places'])} places")
 
     as_of = datetime.fromtimestamp(max_import / 1000, tz=timezone.utc) if max_import else None
     pg = region_meta.get("PG", {})
