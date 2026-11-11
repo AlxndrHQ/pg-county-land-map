@@ -62,7 +62,7 @@ function doGet(e) {
   if (!keyOk_(p.key)) return json_({ ok: false, error: 'bad key' });
   const doc = openDoc_();
   if (p.answers !== '1') return json_({ ok: true, doc: doc.getName() });
-  return json_({ ok: true, doc: doc.getName(), entries: entries_(doc.getBody()) });
+  return json_({ ok: true, doc: doc.getName(), auto: !!geminiKey_(), entries: entries_(doc.getBody()) });
 }
 
 const ANSWER = /^\s*(↳|answer\b|a:)/i;

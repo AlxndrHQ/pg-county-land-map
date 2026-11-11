@@ -629,7 +629,7 @@
   const noteWhen = (n) => new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const answersHtml = (n) => (n.answers || []).map((a) => `<span class="nans">↳ ${esc(a)}</span>`).join("");
   const isQuestionText = (t) => /\?|^\s*(who|what|why|how|when|where|which|is|are|does|do|did|can|could|should|was|were|has|have)\b/i.test(t || "");
-  const noteStatus = (n) => n.sent && !(n.answers || []).length && isQuestionText(n.text) && Date.now() - Date.parse(n.at) < 15 * 60000
+  const noteStatus = (n) => syncCfg.auto && n.sent && !(n.answers || []).length && isQuestionText(n.text) && Date.now() - Date.parse(n.at) < 15 * 60000
     ? "in Google Doc · answer on the way" : noteStatus0(n);
   const noteStatus0 = (n) => (n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only");
   function addParcelNotes(id, d) {
@@ -1049,6 +1049,7 @@
     let j;
     try { j = await (await fetch(`${syncCfg.url}?key=${encodeURIComponent(syncCfg.key)}&answers=1`)).json(); } catch (e) { return; }
     if (!j.ok || !Array.isArray(j.entries)) return;     // older script: no answers yet
+    if (!!j.auto !== !!syncCfg.auto) { syncCfg.auto = !!j.auto; saveSync(); }
     const byKey = new Map(j.entries.map((x) => [x.head.split(" · ")[0] + "|" + normText(x.text), x.answers || []]));
     let changed = false;
     for (const p of projects) for (const n of p.log || []) {
@@ -1113,7 +1114,7 @@
         if (!j.ok) throw new Error(j.error === "bad key" ? "the key doesn't match" : j.error || "no answer");
         syncCfg = { url, key, doc: /^https:\/\/docs\.google\.com\//.test(doc) ? doc : "" }; saveSync();
         msg.textContent = `Connected to "${j.doc}". ` + (Array.isArray(j.entries)
-          ? `Answers: on (${j.entries.filter((x) => x.answers && x.answers.length).length} answered so far).`
+          ? `Answers: on (${j.entries.filter((x) => x.answers && x.answers.length).length} answered so far). Automatic answers: ${j.auto ? "on (Gemini)" : "off (no GEMINI_API_KEY yet)"}.`
           : "Answers: off. This is the older script; paste the new version and deploy a new version to see answers on the map.");
         lastAnswers = 0; fetchAnswers(true);
         renderProjMenu(); syncPending();
