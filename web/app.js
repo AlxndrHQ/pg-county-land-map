@@ -555,6 +555,13 @@
     }
   }
 
+  // Wealth Web link: open it filtered to people based near this map's area, with a link back here.
+  const wwLink = document.getElementById("ww-link");
+  if (wwLink) wwLink.addEventListener("click", () => {
+    const q = new URLSearchParams({ near: "MD,DC,VA", label: "Prince George's County", back: location.href });
+    wwLink.href = "https://alxndrhq.github.io/historical-wealth-mind-map/?" + q.toString() + "#/grid";
+  });
+
   // ---------- projects (saved in this browser only) ----------
   const PKEY = "rem.projects.v1";
   let projects = [], storageOK = true;
@@ -627,7 +634,17 @@
   // Notes and questions written from the parcel drawer. Each note belongs to a project (it is
   // sent under that project's name) and remembers the parcel it is about.
   const noteWhen = (n) => new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  const answersHtml = (n) => (n.answers || []).map((a) => `<span class="nans">↳ ${esc(a)}</span>`).join("");
+  // The note's thread from the doc (answers and follow-ups, in order), plus replies not yet in the doc.
+  const answersHtml = (n) => {
+    const thread = n.thread || (n.answers || []).map((t) => ({ k: "a", t }));
+    const inDoc = new Set(thread.filter((i) => i.k === "f").map((i) => i.t.trim()));
+    const local = (n.replies || []).filter((r) => !inDoc.has(r.text.trim()));
+    const waiting = syncCfg.auto && ((thread.length && thread[thread.length - 1].k === "f") || local.some((r) => r.sent));
+    return thread.map((i) => i.k === "a" ? `<span class="nans">↳ ${esc(i.t)}</span>` : `<span class="nfol">${esc(i.t)}</span>`).join("")
+      + local.map((r) => `<span class="nfol">${esc(r.text)} <span class="sub">${r.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only"}</span></span>`).join("")
+      + (waiting ? `<span class="sub nwait">answer on the way</span>` : "")
+      + (n.sent ? `<button type="button" class="linkish nreply" data-reply="${esc(n.id)}">Reply</button>` : "");
+  };
   const isQuestionText = (t) => /\?|^\s*(who|what|why|how|when|where|which|is|are|does|do|did|can|could|should|was|were|has|have)\b/i.test(t || "");
   const noteStatus = (n) => syncCfg.auto && n.sent && !(n.answers || []).length && isQuestionText(n.text) && Date.now() - Date.parse(n.at) < 15 * 60000
     ? "in Google Doc · answer on the way" : noteStatus0(n);
@@ -686,6 +703,23 @@
     refreshNotes = () => paint(slot.querySelector("textarea") ? slot.querySelector("textarea").value : "");
   }
   let refreshNotes = null;
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-reply]"); if (!b) return;
+    if (b.nextElementSibling && b.nextElementSibling.matches(".nreplyform")) { b.nextElementSibling.querySelector("input").focus(); return; }
+    const f = document.createElement("form"); f.className = "nreplyform";
+    f.innerHTML = `<input name="t" maxlength="2000" placeholder="Follow-up question…" aria-label="Follow-up">`;
+    b.after(f); f.t.focus();
+    f.addEventListener("submit", (ev) => {
+      ev.preventDefault(); const text = f.t.value.trim(); if (!text) return;
+      for (const p of projects) for (const n of p.log || []) if (n.id === b.dataset.reply) {
+        n.replies = n.replies || [];
+        n.replies.push({ id: newId(), at: new Date().toISOString(), text, sent: false });
+        touch(p);
+      }
+      if (refreshNotes) refreshNotes();
+      syncPending();
+    });
+  });
 
   // project view
   function loadMany(ids) { return Promise.all(ids.map((id) => loadShard(id).then((d) => [id, d]).catch(() => [id, null]))); }
@@ -1013,25 +1047,36 @@
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || "not saved");
   }
+  async function sendReply(n, r) {
+    const payload = { key: syncCfg.key, parent: { at: n.at, text: n.text }, text: r.text, at: r.at };
+    const res = await fetch(syncCfg.url, { method: "POST", body: JSON.stringify(payload) });
+    const j = await res.json();
+    if (!j.ok) throw new Error(j.error || "not saved");
+  }
   let syncing = false;
   async function syncPending() {
     if (syncing || !syncCfg.url || !syncCfg.key) return;
     syncing = true;
     let sent = 0, failed = null, sentQuestion = false;
     try {
-      for (const p of projects) for (const n of p.log || []) {
-        if (n.sent) continue;
-        try { await sendNote(p, n); n.sent = true; sent++; if (isQuestionText(n.text)) sentQuestion = true; saveProjects(); }
-        catch (e) { failed = e; break; }
+      outer: for (const p of projects) for (const n of p.log || []) {
+        if (!n.sent) {
+          try { await sendNote(p, n); n.sent = true; sent++; if (isQuestionText(n.text)) sentQuestion = true; saveProjects(); }
+          catch (e) { failed = e; break outer; }
+        }
+        for (const r of n.replies || []) {
+          if (r.sent || !n.sent) continue;
+          try { await sendReply(n, r); r.sent = true; sent++; sentQuestion = true; saveProjects(); }
+          catch (e) { failed = e; break outer; }
+        }
       }
     } finally { syncing = false; }
     if (failed) toast(`A note couldn't reach Google Docs (${failed.message}). It stays saved here and will retry.`);
     else if (sent) toast(sent === 1 ? "Note sent to Google Docs." : `${sent} notes sent to Google Docs.`);
     if (sent && refreshNotes && !drawer.hidden) refreshNotes();
     fetchAnswers();
-    if (sentQuestion) {               // the doc's script answers questions within a minute or two; look again then
-      setTimeout(() => fetchAnswers(true), 45000);
-      setTimeout(() => fetchAnswers(true), 120000);
+    if (sentQuestion) {               // the answer routine takes a few minutes; look again then
+      for (const ms of [60000, 180000, 300000, 480000]) setTimeout(() => fetchAnswers(true), ms);
     }
   }
   // Answers written under a note in the doc ("↳ Answer (Claude): …") come back here and show under the note.
@@ -1050,12 +1095,15 @@
     try { j = await (await fetch(`${syncCfg.url}?key=${encodeURIComponent(syncCfg.key)}&answers=1`)).json(); } catch (e) { return; }
     if (!j.ok || !Array.isArray(j.entries)) return;     // older script: no answers yet
     if (!!j.auto !== !!syncCfg.auto) { syncCfg.auto = !!j.auto; saveSync(); }
-    const byKey = new Map(j.entries.map((x) => [x.head.split(" · ")[0] + "|" + normText(x.text), x.answers || []]));
+    const byKey = new Map(j.entries.map((x) => [x.head.split(" · ")[0] + "|" + normText(x.text),
+      x.thread || (x.answers || []).map((t) => ({ k: "a", t }))]));
     let changed = false;
     for (const p of projects) for (const n of p.log || []) {
       if (!n.sent) continue;
-      const a = byKey.get(nyMinute(n.at) + "|" + normText(n.text));
-      if (a && JSON.stringify(a) !== JSON.stringify(n.answers || [])) { n.answers = a; changed = true; }
+      const th = byKey.get(nyMinute(n.at) + "|" + normText(n.text));
+      if (th && JSON.stringify(th) !== JSON.stringify(n.thread || [])) {
+        n.thread = th; n.answers = th.filter((i) => i.k === "a").map((i) => i.t); changed = true;
+      }
     }
     if (changed) { saveProjects(); if (refreshNotes && !drawer.hidden) refreshNotes(); }
   }

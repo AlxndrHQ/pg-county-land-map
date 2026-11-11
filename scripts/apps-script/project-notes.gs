@@ -72,26 +72,56 @@ function doGet(e) {
   return json_({ ok: true, doc: doc.getName(), auto: claudeTrigger_() ? 'claude' : geminiKey_() ? 'gemini' : '', entries: entries_(doc.getBody()) });
 }
 
-const ANSWER = /^\s*(↳|answer\b|a:)/i;
+const FOLLOW = /^\s*↳\s*follow-?up\b/i;
+const ANSWER = /^\s*(↳(?!\s*follow-?up)|answer\b|a:)/i;
 
-/** Notes under the marker: [{head, text, answers}]. The map matches them by heading and text. */
-function entries_(body) {
+/** Adds "↳ Follow-up: …" at the end of a note's thread (after its answers, before its parcel bullets). */
+function addFollowUp_(parent, text) {
+  const minute = Utilities.formatDate(new Date(parent.at), TZ, 'yyyy-MM-dd HH:mm');
+  const ptext = String(parent.text || '').split(/\n+/).map(function (x) { return x.trim(); }).filter(String).join('\n');
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try {
+    const doc = openDoc_(), body = doc.getBody();
+    const notes = notes_(body);
+    const note = notes.filter(function (x) { return x.head.indexOf(minute) === 0 && x.text.join('\n') === ptext; })[0];
+    if (!note) return json_({ ok: false, error: 'original note not found in the doc' });
+    const para = body.insertParagraph(note.last + 1, '↳ Follow-up: ' + text.replace(/\s*\n+\s*/g, ' '))
+      .setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    para.setIndentStart(18).setIndentFirstLine(18).setSpacingBefore(4);
+    para.editAsText().setBold(false).setItalic(false).setBold(0, '↳ Follow-up:'.length - 1, true);
+    doc.saveAndClose();
+  } finally { lock.releaseLock(); }
+  if (claudeTrigger_()) pingClaude_();
+  return json_({ ok: true });
+}
+
+/** Notes under the marker: heading, text paragraphs, thread items, index of the last non-bullet paragraph. */
+function notes_(body) {
   const out = [];
   let cur = null, started = false;
   for (let k = 0; k < body.getNumChildren(); k++) {
-    const el = body.getChild(k);
-    const type = el.getType();
+    const el = body.getChild(k), type = el.getType();
     if (type !== DocumentApp.ElementType.PARAGRAPH && type !== DocumentApp.ElementType.LIST_ITEM) continue;
     const text = el.asText().getText().trim();
     if (!started) { started = text === MARKER; continue; }
     if (type === DocumentApp.ElementType.PARAGRAPH && el.asParagraph().getHeading() === DocumentApp.ParagraphHeading.HEADING3) {
-      cur = { head: text, text: [], answers: [] }; out.push(cur); continue;
+      cur = { head: text, text: [], thread: [], last: k }; out.push(cur); continue;
     }
     if (!cur || !text || type === DocumentApp.ElementType.LIST_ITEM) continue;
-    if (ANSWER.test(text)) cur.answers.push(text.replace(/^\s*↳\s*/, ''));
-    else if (!cur.answers.length) cur.text.push(text);
+    cur.last = k;
+    if (FOLLOW.test(text)) cur.thread.push({ k: 'f', t: text.replace(FOLLOW, '').replace(/^\s*:\s*/, '') });
+    else if (ANSWER.test(text)) cur.thread.push({ k: 'a', t: text.replace(/^\s*↳\s*/, '') });
+    else if (!cur.thread.length) cur.text.push(text);
   }
-  return out.map(function (x) { return { head: x.head, text: x.text.join('\n'), answers: x.answers }; });
+  return out;
+}
+
+/** Notes under the marker: [{head, text, answers}]. The map matches them by heading and text. */
+function entries_(body) {
+  return notes_(body).map(function (x) {
+    return { head: x.head, text: x.text.join('\n'), thread: x.thread,
+             answers: x.thread.filter(function (i) { return i.k === 'a'; }).map(function (i) { return i.t; }) };
+  });
 }
 
 /** Append one note. Body: JSON {key, project, kind, text, at, parcels:[{label, url}]}. */
@@ -101,6 +131,7 @@ function doPost(e) {
   if (!keyOk_(d.key)) return json_({ ok: false, error: 'bad key' });
   const text = String(d.text || '').trim().slice(0, MAX_TEXT);
   if (!text) return json_({ ok: false, error: 'empty note' });
+  if (d.parent) return addFollowUp_(d.parent, text);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);

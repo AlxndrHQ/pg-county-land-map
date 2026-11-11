@@ -232,3 +232,9 @@ button.oname:hover{color:var(--accent)}
 .qadd input:focus{border-color:var(--edge-strong)}
 .psales summary{cursor:pointer;list-style:none}
 .psales summary::-webkit-details-marker{display:none}
+.nlog .nfol{display:block;margin:6px 0 0 14px;padding-left:10px;border-left:1px solid var(--accent);font-size:13px;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere}
+.nlog .nfol .sub{display:inline;margin-left:6px}
+.nlog .nwait{margin:4px 0 0 24px}
+.nlog .nreply{display:inline-block;margin:6px 0 0 24px;font:500 9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.nreplyform input{width:calc(100% - 24px);margin:6px 0 0 24px;background:transparent;border:1px solid var(--line);border-radius:2px;padding:6px 9px;font:13px var(--sans);color:var(--text);outline:none}
+.nreplyform input:focus{border-color:var(--edge-strong)}
