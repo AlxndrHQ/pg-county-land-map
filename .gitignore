@@ -4,3 +4,4 @@ data/build/
 .DS_Store
 __pycache__/
 *.pyc
+CLAUDE.local.md
