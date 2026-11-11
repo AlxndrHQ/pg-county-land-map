@@ -633,11 +633,15 @@
     const slot = body.querySelector("#pnote-slot");
     if (!slot) return;
     const label = d.a || "Account " + d.acct;
+    let owner = new Set([id]);               // this parcel, plus the owner group's parcels once the index loads
+    if (!d.pv && d.g != null) loadIndex().then((idx) => {
+      const g = idx.groups[d.g]; if (g && g.ids.length > 1) { owner = new Set(g.ids); paint(slot.querySelector("textarea") ? slot.querySelector("textarea").value : ""); }
+    }).catch(() => {});
     const paint = (keep = "") => {
       if (!document.contains(slot)) return;
       const inN = projects.filter((p) => p.ids.includes(id));
       const rest = projects.filter((p) => !p.ids.includes(id));
-      const notes = projects.flatMap((p) => (p.log || []).filter((n) => n.pid === id).map((n) => ({ ...n, pname: p.name })))
+      const notes = projects.flatMap((p) => (p.log || []).filter((n) => n.pid && owner.has(n.pid)).map((n) => ({ ...n, pname: p.name })))
         .sort((a, b) => (a.at < b.at ? 1 : -1));
       slot.innerHTML = `
         <div class="lbl sec">Notes and questions</div>
@@ -654,7 +658,7 @@
           <span class="syncstat">${syncCfg.url ? "Sends to your Project Notes doc" : `Saved in this browser · <button type="button" class="linkish" data-sync>Connect Google Doc</button>`}</span>
         </form>
         ${notes.length ? `<ul class="nlog">${notes.map((n) => `
-          <li><span class="sub">${esc(noteWhen(n))} · ${esc(n.pname)} · ${noteStatus(n)}</span>
+          <li><span class="sub">${esc(noteWhen(n))} · ${esc(n.pname)}${n.pid !== id ? " · about " + esc(n.pl || "another parcel of this owner") : ""} · ${noteStatus(n)}</span>
             <span class="ntext">${esc(n.text)}</span>${answersHtml(n)}</li>`).join("")}</ul>` : ""}`;
       const f = slot.querySelector("form");
       f.t.value = keep;
@@ -695,8 +699,26 @@
       const pts = ok.flatMap(([, d]) => d.c || []);
       setSelected(p.ids, pts);
       const ac = ok.reduce((a, [, d]) => a + (d.ac || 0), 0), tv = ok.reduce((a, [, d]) => a + (d.tv || 0), 0);
-      const groups = new Map();
-      for (const [, d] of ok) if (d.g != null && idx && idx.groups[d.g] && idx.groups[d.g].m.length > 1) groups.set(d.g, idx.groups[d.g]);
+      // One section per owner: an owner group (entities), or the parcel itself (people, ungrouped).
+      const secs = new Map();
+      for (const [id, d] of ok) {
+        const g = !d.pv && d.g != null && idx ? idx.groups[d.g] : null;
+        const key = g ? "g" + d.g : "p" + id;
+        if (!secs.has(key)) secs.set(key, {
+          key, gid: g ? d.g : null, label: g ? g.l : d.pv ? "Individually owned" : d.o || "Owner",
+          sub: g ? `${g.m.length > 1 ? plural(g.m.length, "entity") + " · " : ""}${plural(g.ids.length, "parcel")} in the county` : "",
+          rows: [], match: new Set(g ? g.ids : [id]), notes: [], last: "" });
+        secs.get(key).rows.push([id, d]);
+      }
+      const general = [];
+      for (const n of p.log || []) {
+        const sec = n.pid && [...secs.values()].find((x) => x.match.has(n.pid));
+        if (sec) { sec.notes.push(n); if (n.at > sec.last) sec.last = n.at; } else general.push(n);
+      }
+      const ordered = [...secs.values()].sort((a, b) => (a.last < b.last ? 1 : a.last > b.last ? -1 : 0));
+      const noteLi = (n, multi) => `
+          <li><span class="sub">${esc(noteWhen(n))}${multi && n.pl ? " · " + esc(n.pl) : ""} · ${noteStatus(n)}</span>
+            <span class="ntext">${esc(n.text)}</span>${answersHtml(n)}</li>`;
       const sales = ok.flatMap(([id, d]) => (d.sh || (d.sd ? [{ d: d.sd, p: d.sp, deed: d.lf }] : []))
         .map((r) => ({ ...r, where: d.a || "Account " + d.acct, who: d.pv ? "Individually owned" : d.o }))).sort((a, b) => (a.d < b.d ? 1 : -1));
       const doc = (p.doc || "").trim();
@@ -706,18 +728,20 @@
         <h2 contenteditable="plaintext-only" spellcheck="false" class="pname" title="Click to rename">${esc(p.name)}</h2>
         <p class="addr">${plural(p.ids.length, "parcel")} · ${acres(ac)} · assessed ${usd(tv)}</p>
         ${p.ids.length ? "" : `<p class="note">No parcels yet. Click any parcel on the map and choose “+ Add to project”.</p>`}
-        ${ok.length ? `<div class="lbl sec">Parcels</div><ul class="plist ptab">${ok.map(([id, d]) => `
-          <li><button type="button" data-id="${esc(id)}"><span>${esc(d.a || "Account " + d.acct)}</span>
-            <span class="sub">${esc(d.pv ? "Individually owned" : d.o || "")}${d.sd ? " · sold " + d.sd.slice(0, 4) : ""}</span></button>
-            <button type="button" class="rm" data-rm="${esc(id)}" aria-label="Remove from project">×</button></li>`).join("")}</ul>` : ""}
-        ${groups.size ? `<div class="lbl sec">Owner groups involved</div><ul class="plist">${[...groups].map(([gid, g]) => `
-          <li><button type="button" data-g="${gid}">${esc(g.l)} <span class="sub">${plural(g.m.length, "entity")} · ${plural(g.ids.length, "parcel")}</span></button></li>`).join("")}</ul>` : ""}
-        ${sales.length ? `<div class="lbl sec">Sales, newest first</div><ul class="sales tl">${sales.map((r) => `
-          <li><span class="num">${esc(date(r.d))}</span> <span class="num">${r.p ? usd(r.p) : "no price"}</span>
-          <span class="sub">${esc(r.where)}${r.who ? " · " + esc(r.who) : ""}${r.deed ? " · deed " + esc(r.deed) : ""}</span></li>`).join("")}</ul>` : ""}
-        <div class="lbl sec">Notes and questions</div>
+        ${ordered.length ? `<div class="lbl sec">By owner</div>${ordered.map((sec) => `
+          <section class="osec">
+            <div class="oshead">${sec.gid != null ? `<button type="button" class="oname" data-g="${sec.gid}">${esc(sec.label)}</button>` : `<span class="oname">${esc(sec.label)}</span>`}
+              ${sec.sub ? `<span class="sub">${sec.sub}</span>` : ""}</div>
+            <ul class="plist ptab">${sec.rows.map(([id, d]) => `
+              <li><button type="button" data-id="${esc(id)}"><span>${esc(d.a || "Account " + d.acct)}</span>
+                <span class="sub">${esc(d.pv ? "Individually owned" : d.o || "")}${d.sd ? " · sold " + d.sd.slice(0, 4) : ""}</span></button>
+                <button type="button" class="rm" data-rm="${esc(id)}" aria-label="Remove from project">×</button></li>`).join("")}</ul>
+            ${sec.notes.length ? `<ul class="nlog">${sec.notes.slice().sort((a, b) => (a.at < b.at ? 1 : -1)).map((n) => noteLi(n, sec.rows.length > 1)).join("")}</ul>` : ""}
+            <form class="qadd" data-sec="${sec.key}"><input name="t" placeholder="Ask or note something about ${esc(sec.rows.length > 1 || sec.gid != null ? "this owner" : "this parcel")}…" aria-label="New note" maxlength="2000"></form>
+          </section>`).join("")}` : ""}
+        <div class="lbl sec">General notes</div>
         <form class="noteform" data-p="${p.id}">
-          <textarea name="t" rows="3" placeholder="Write a note or a question about this project…" aria-label="New note"></textarea>
+          <textarea name="t" rows="2" placeholder="A note or question about the whole project…" aria-label="New note"></textarea>
           <div class="noterow">
             <button class="linkish" type="submit" title="Add (⌘↵ or Ctrl+Enter)">Add</button><span class="kbd">⌘↵</span>
             <span class="syncstat">${syncCfg.url
@@ -727,9 +751,10 @@
         </form>
         ${syncCfg.url ? "" : `<div class="synccta"><span>Send these notes to your Google Doc automatically.</span>
           <button type="button" class="linkish" data-sync>Set it up (one time, about 3 min) →</button></div>`}
-        <ul class="nlog">${(p.log || []).slice().reverse().map((n) => `
-          <li><span class="sub">${esc(noteWhen(n))}${n.pl ? " · " + esc(n.pl) : ""} · ${noteStatus(n)}</span>
-            <span class="ntext">${esc(n.text)}</span>${answersHtml(n)}</li>`).join("")}</ul>
+        ${general.length ? `<ul class="nlog">${general.slice().reverse().map((n) => noteLi(n, true)).join("")}</ul>` : ""}
+        ${sales.length ? `<details class="psales"><summary class="lbl sec">Sales, newest first · ${sales.length}</summary><ul class="sales tl">${sales.map((r) => `
+          <li><span class="num">${esc(date(r.d))}</span> <span class="num">${r.p ? usd(r.p) : "no price"}</span>
+          <span class="sub">${esc(r.where)}${r.who ? " · " + esc(r.who) : ""}${r.deed ? " · deed " + esc(r.deed) : ""}</span></li>`).join("")}</ul></details>` : ""}
         <div class="lbl sec">Research doc</div>
         <div class="pdoc"><input class="pdocin" placeholder="Paste a Google Doc link" value="${esc(doc)}"> ${docLink}</div>
         <div class="pact"><button type="button" class="linkish" data-export>Export</button>
@@ -742,6 +767,15 @@
       const nm = body.querySelector(".pname");
       nm.addEventListener("blur", () => { const v = nm.textContent.trim(); if (v && v !== p.name) { p.name = v.slice(0, 80); touch(p); } });
       nm.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); nm.blur(); } });
+      body.querySelectorAll(".qadd").forEach((f) => f.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const text = f.t.value.trim(), sec = secs.get(f.dataset.sec); if (!text || !sec) return;
+        const [id, d] = sec.rows[0];
+        p.log = p.log || [];
+        p.log.push({ id: newId(), at: new Date().toISOString(), kind: "note", text, sent: false, pid: id,
+                     pl: sec.rows.length > 1 || sec.gid != null ? sec.label : d.a || "Account " + d.acct });
+        touch(p); showProject(p.id); syncPending();
+      }));
       const nf = body.querySelector(".noteform");
       const addNote = () => {
         const text = nf.t.value.trim(); if (!text) return;
@@ -1067,11 +1101,14 @@
       if (!key) { msg.textContent = "Add the key from setup()."; return; }
       msg.textContent = "Testing…";
       try {
-        const r = await fetch(`${url}?key=${encodeURIComponent(key)}`);
+        const r = await fetch(`${url}?key=${encodeURIComponent(key)}&answers=1`);
         const j = await r.json();
         if (!j.ok) throw new Error(j.error === "bad key" ? "the key doesn't match" : j.error || "no answer");
         syncCfg = { url, key, doc: /^https:\/\/docs\.google\.com\//.test(doc) ? doc : "" }; saveSync();
-        msg.textContent = `Connected to "${j.doc}".`;
+        msg.textContent = `Connected to "${j.doc}". ` + (Array.isArray(j.entries)
+          ? `Answers: on (${j.entries.filter((x) => x.answers && x.answers.length).length} answered so far).`
+          : "Answers: off. This is the older script; paste the new version and deploy a new version to see answers on the map.");
+        lastAnswers = 0; fetchAnswers(true);
         renderProjMenu(); syncPending();
       } catch (err) { msg.textContent = `Couldn't connect: ${err.message}. Check the URL, the key, and that access is set to Anyone.`; }
     });
