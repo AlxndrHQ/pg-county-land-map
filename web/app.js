@@ -627,6 +627,7 @@
   // Notes and questions written from the parcel drawer. Each note belongs to a project (it is
   // sent under that project's name) and remembers the parcel it is about.
   const noteWhen = (n) => new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const answersHtml = (n) => (n.answers || []).map((a) => `<span class="nans">↳ ${esc(a)}</span>`).join("");
   const noteStatus = (n) => (n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only");
   function addParcelNotes(id, d) {
     const slot = body.querySelector("#pnote-slot");
@@ -654,7 +655,7 @@
         </form>
         ${notes.length ? `<ul class="nlog">${notes.map((n) => `
           <li><span class="sub">${esc(noteWhen(n))} · ${esc(n.pname)} · ${noteStatus(n)}</span>
-            <span class="ntext">${esc(n.text)}</span></li>`).join("")}</ul>` : ""}`;
+            <span class="ntext">${esc(n.text)}</span>${answersHtml(n)}</li>`).join("")}</ul>` : ""}`;
       const f = slot.querySelector("form");
       f.t.value = keep;
       const sl = f.querySelector("[data-sync]"); if (sl) sl.addEventListener("click", showSyncSettings);
@@ -674,6 +675,7 @@
       f.t.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); add(); } });
     };
     paint();
+    fetchAnswers();
     refreshNotes = () => paint(slot.querySelector("textarea") ? slot.querySelector("textarea").value : "");
   }
   let refreshNotes = null;
@@ -727,7 +729,7 @@
           <button type="button" class="linkish" data-sync>Set it up (one time, about 3 min) →</button></div>`}
         <ul class="nlog">${(p.log || []).slice().reverse().map((n) => `
           <li><span class="sub">${esc(noteWhen(n))}${n.pl ? " · " + esc(n.pl) : ""} · ${noteStatus(n)}</span>
-            <span class="ntext">${esc(n.text)}</span></li>`).join("")}</ul>
+            <span class="ntext">${esc(n.text)}</span>${answersHtml(n)}</li>`).join("")}</ul>
         <div class="lbl sec">Research doc</div>
         <div class="pdoc"><input class="pdocin" placeholder="Paste a Google Doc link" value="${esc(doc)}"> ${docLink}</div>
         <div class="pact"><button type="button" class="linkish" data-export>Export</button>
@@ -761,6 +763,7 @@
         projects = projects.filter((x) => x.id !== p.id); saveProjects(); closeDrawer();
       });
       lastProject = p.id;
+      fetchAnswers();
       refreshNotes = () => { if (body.querySelector(`.noteform[data-p="${p.id}"]`)) showProject(p.id); };
       if (map && pts.length) {
         const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
@@ -988,6 +991,31 @@
     if (failed) toast(`A note couldn't reach Google Docs (${failed.message}). It stays saved here and will retry.`);
     else if (sent) toast(sent === 1 ? "Note sent to Google Docs." : `${sent} notes sent to Google Docs.`);
     if (sent && refreshNotes && !drawer.hidden) refreshNotes();
+    fetchAnswers();
+  }
+  // Answers written under a note in the doc ("↳ Answer (Claude): …") come back here and show under the note.
+  // Notes are matched by their minute (New York time, as the doc heading shows it) and their text.
+  const nyMinute = (iso) => {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+  };
+  const normText = (t) => String(t || "").split(/\n+/).map((x) => x.trim()).filter(Boolean).join("\n");
+  let lastAnswers = 0;
+  async function fetchAnswers(force) {
+    if (!syncCfg.url || !syncCfg.key || (!force && Date.now() - lastAnswers < 60000)) return;
+    lastAnswers = Date.now();
+    let j;
+    try { j = await (await fetch(`${syncCfg.url}?key=${encodeURIComponent(syncCfg.key)}&answers=1`)).json(); } catch (e) { return; }
+    if (!j.ok || !Array.isArray(j.entries)) return;     // older script: no answers yet
+    const byKey = new Map(j.entries.map((x) => [x.head.split(" · ")[0] + "|" + normText(x.text), x.answers || []]));
+    let changed = false;
+    for (const p of projects) for (const n of p.log || []) {
+      if (!n.sent) continue;
+      const a = byKey.get(nyMinute(n.at) + "|" + normText(n.text));
+      if (a && JSON.stringify(a) !== JSON.stringify(n.answers || [])) { n.answers = a; changed = true; }
+    }
+    if (changed) { saveProjects(); if (refreshNotes && !drawer.hidden) refreshNotes(); }
   }
   function toast(msg) {
     let t = document.getElementById("toast");

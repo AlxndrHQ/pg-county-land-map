@@ -15,6 +15,13 @@
  *      Deploy, then copy the Web app URL (ends in /exec).
  *   4. On the map: Projects › "Connect Google Doc", paste the URL and the key, Test.
  *
+ * Answers: write an answer as a paragraph under the note that starts with "↳" or "Answer"
+ * (e.g. "↳ Answer (Claude): ..."). The map reads them back and shows them under the note.
+ *
+ * Updating: paste the new version over Code.gs, save, then Deploy › Manage deployments ›
+ * Edit (pencil) › Version: New version › Deploy. The URL and key stay the same; don't run
+ * setup() again unless you want a new key.
+ *
  * Security: the endpoint accepts a note only with the right key, and can only
  * add text to this one document. The URL and key live in your browser only;
  * neither is in the public repo. To revoke access, run setup() again (new key)
@@ -38,11 +45,35 @@ function setup() {
   Logger.log('Paste this key into the map (Projects › Connect Google Doc): ' + key);
 }
 
-/** Health check used by the map's "Test" button. */
+/** Health check used by the map's "Test" button; with answers=1, also returns every note and its answers. */
 function doGet(e) {
   const p = (e && e.parameter) || {};
   if (!keyOk_(p.key)) return json_({ ok: false, error: 'bad key' });
-  return json_({ ok: true, doc: openDoc_().getName() });
+  const doc = openDoc_();
+  if (p.answers !== '1') return json_({ ok: true, doc: doc.getName() });
+  return json_({ ok: true, doc: doc.getName(), entries: entries_(doc.getBody()) });
+}
+
+const ANSWER = /^\s*(↳|answer\b|a:)/i;
+
+/** Notes under the marker: [{head, text, answers}]. The map matches them by heading and text. */
+function entries_(body) {
+  const out = [];
+  let cur = null, started = false;
+  for (let k = 0; k < body.getNumChildren(); k++) {
+    const el = body.getChild(k);
+    const type = el.getType();
+    if (type !== DocumentApp.ElementType.PARAGRAPH && type !== DocumentApp.ElementType.LIST_ITEM) continue;
+    const text = el.asText().getText().trim();
+    if (!started) { started = text === MARKER; continue; }
+    if (type === DocumentApp.ElementType.PARAGRAPH && el.asParagraph().getHeading() === DocumentApp.ParagraphHeading.HEADING3) {
+      cur = { head: text, text: [], answers: [] }; out.push(cur); continue;
+    }
+    if (!cur || !text || type === DocumentApp.ElementType.LIST_ITEM) continue;
+    if (ANSWER.test(text)) cur.answers.push(text.replace(/^\s*↳\s*/, ''));
+    else if (!cur.answers.length) cur.text.push(text);
+  }
+  return out.map(function (x) { return { head: x.head, text: x.text.join('\n'), answers: x.answers }; });
 }
 
 /** Append one note. Body: JSON {key, project, kind, text, at, parcels:[{label, url}]}. */

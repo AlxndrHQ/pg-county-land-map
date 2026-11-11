@@ -220,3 +220,4 @@ main{flex:1;min-height:0;position:relative}
 .swatches.big .sw{width:18px;height:18px}
 .sw[aria-pressed="true"]{outline-color:var(--text)}
 .kbd{font:500 10px var(--mono);color:var(--dim);margin-left:-6px}
+.nlog .nans{display:block;margin:4px 0 0 14px;padding-left:10px;border-left:1px solid var(--line2);font-size:13px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
