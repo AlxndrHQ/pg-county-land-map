@@ -474,13 +474,38 @@
         if (hasAll(d.addrsU[i])) { items.push({ kind: "addr", a: d.addrs[i] }); n++; }
       }
     }
-    paint();
+    const geoQ = raw.length >= 3 && !items.some((it) => it.kind === "acct") ? raw : null;
+    paint(geoQ);
+    clearTimeout(geoTimer);
+    if (geoQ) geoTimer = setTimeout(() => geoSearch(geoQ).then((hits) => {
+      if (input.value.trim() !== raw || !hits.length) { if (input.value.trim() === raw) paint(); return; }
+      items = items.filter((it) => it.kind !== "geo").concat(hits.map((h) => ({ kind: "geo", h })));
+      paint();
+    }), 350);
+  }
+  let geoTimer = null;
+
+  // Place names (buildings, malls, landmarks) from OpenStreetMap via Photon, limited to the county.
+  // Debounced by the search box timer and cached per query, to stay polite to the free service.
+  const PG_BBOX = "-77.09,38.53,-76.66,39.13";
+  const geoCache = new Map();
+  function geoSearch(q) {
+    const k = q.toLowerCase();
+    if (!geoCache.has(k)) geoCache.set(k, fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=en&bbox=${PG_BBOX}`)
+      .then((r) => (r.ok ? r.json() : { features: [] }))
+      .then((j) => (j.features || []).map((f) => {
+        const pr = f.properties || {};
+        const street = [pr.housenumber, pr.street].filter(Boolean).join(" ");
+        return { name: pr.name || street || pr.city || q, sub: [pr.name ? street : "", pr.city || pr.county].filter(Boolean).join(", "), c: f.geometry.coordinates };
+      }))
+      .catch(() => { geoCache.delete(k); return []; }));
+    return geoCache.get(k);
   }
 
-  const KIND_LABEL = { acct: "Account", place: "Places", owner: "Owners", addr: "Addresses" };
-  function paint() {
+  const KIND_LABEL = { acct: "Account", place: "Places", owner: "Owners", addr: "Addresses", geo: "On the map (OpenStreetMap)" };
+  function paint(pending) {
     if (!items.length) {
-      results.innerHTML = `<div class="empty">No matches. Homes owned by individuals aren't searchable by owner name.</div>`;
+      results.innerHTML = `<div class="empty">${pending ? "Searching map places…" : "No matches. Homes owned by individuals aren't searchable by owner name."}</div>`;
       results.hidden = false; return;
     }
     let html = "", last = "";
@@ -496,6 +521,7 @@
         main = esc(g.l) + (via ? `<span class="via">via ${esc(via[0])}</span>` : "");
         sub = `${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.ids.length, "parcel")} · ${acres(g.ac)}`;
       }
+      else if (it.kind === "geo") { main = esc(it.h.name); sub = esc(it.h.sub); }
       else main = esc(it.a[0]);
       html += `<button type="button" class="res" data-i="${i}"><span>${main}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</button>`;
     });
@@ -515,6 +541,13 @@
     if (it.kind === "acct") select(it.id, { fly: true, label: it.label });
     else if (it.kind === "addr") select(it.a[1], { fly: true });
     else if (it.kind === "owner") showGroup(it.gid);
+    else if (it.kind === "geo" && map) {
+      // OSM points are approximate, so pin the place and let the viewer pick the parcel
+      closeDrawer();
+      setSelected([], [], { label: it.h.name, pt: it.h.c });
+      map.flyTo({ center: it.h.c, zoom: 16.5 });
+      toast("Pinned from OpenStreetMap. Click the parcel to see who owns it.");
+    }
     else if (it.kind === "place" && map) {
       closeDrawer();
       const b = it.p[3];
