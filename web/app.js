@@ -85,7 +85,9 @@
           "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.3, 15, 0.7, 18, 1.2],
           "line-opacity": ["case", ["==", ["get", "t"], "p"], 0.9, 0.95],
         } },
-      { id: "sel-dots", type: "circle", source: "seldots", maxzoom: 14,
+      { id: "spokes", type: "line", source: "seldots", filter: ["==", ["geometry-type"], "LineString"],
+        paint: { "line-color": P.accent, "line-width": 0.7, "line-opacity": 0.55 } },
+      { id: "sel-dots", type: "circle", source: "seldots", maxzoom: 14, filter: ["==", ["get", "k"], "pt"],
         paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2.2, 13, 4], "circle-color": P.accent,
                  "circle-stroke-color": P.bg, "circle-stroke-width": 1 } },
       { id: "parcel-sel-fill", type: "fill", source: "parcels", "source-layer": "parcels",
@@ -93,6 +95,12 @@
       { id: "parcel-sel-line", type: "line", source: "parcels", "source-layer": "parcels",
         filter: selFilter(),
         paint: { "line-color": P.accent, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 17, 2] } },
+      { id: "hub-dot", type: "circle", source: "seldots", filter: ["==", ["get", "k"], "hub"],
+        paint: { "circle-radius": 5, "circle-color": P.bg, "circle-stroke-color": P.accent, "circle-stroke-width": 1.5 } },
+      { id: "hub-label", type: "symbol", source: "seldots", filter: ["==", ["get", "k"], "hub"],
+        layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Regular"], "text-size": 12,
+                  "text-offset": [0, -1.3], "text-anchor": "bottom", "text-max-width": 14, "text-allow-overlap": true },
+        paint: { "text-color": P.text, "text-halo-color": P.bg, "text-halo-width": 2 } },
     ];
   }
 
@@ -143,15 +151,21 @@
     document.getElementById("hint").classList.toggle("off", map.getZoom() >= PARCEL_MINZOOM);
   }
 
-  let selPts = [];
+  let selPts = [], selHub = null;
   function dotsData() {
     const f = [];
-    for (let i = 0; i < selPts.length; i += 2) f.push({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [selPts[i], selPts[i + 1]] } });
+    for (let i = 0; i < selPts.length; i += 2) {
+      const pt = [selPts[i], selPts[i + 1]];
+      f.push({ type: "Feature", properties: { k: "pt" }, geometry: { type: "Point", coordinates: pt } });
+      if (selHub) f.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [selHub.pt, pt] } });
+    }
+    if (selHub) f.push({ type: "Feature", properties: { k: "hub", label: selHub.label }, geometry: { type: "Point", coordinates: selHub.pt } });
     return { type: "FeatureCollection", features: f };
   }
-  function setSelected(ids, pts) {
+  function setSelected(ids, pts, hub) {
     selectedIds = ids || [];
     selPts = pts || [];
+    selHub = hub || null;
     if (map && map.getSource("seldots")) map.getSource("seldots").setData(dotsData());
     if (map && map.getLayer("parcel-sel-fill")) {
       map.setFilter("parcel-sel-fill", selFilter()); map.setFilter("parcel-sel-line", selFilter());
@@ -197,6 +211,7 @@
       if (!d) { setSelected([]); body.innerHTML = `<div class="lbl">No parcel with account ${esc(opts.label || id)}</div>`; return; }
       body.innerHTML = (opts.back ? opts.back : "") + render(d);
       wireBack();
+      fillGroupRow(d);
       if (opts.fly && d.c && map) map.flyTo({ center: d.c, zoom: Math.max(map.getZoom(), 16.5), padding: drawerPad() });
     }).catch((e) => {
       if (token === reqToken) body.innerHTML = `<div class="lbl">Couldn't load parcel details</div><p class="note">${esc(e.message)}</p>`;
@@ -242,6 +257,7 @@
       ${privacyNote}
       <dl>
         ${d.pv ? "" : row("Mailing", [d.co, d.ma].filter(Boolean).map(esc).join("<br>") || "—")}
+        ${d.g != null ? `<div id="grp-slot" style="display:contents"></div>` : ""}
         ${row("Account", `<span class="num">${esc(d.acct)}</span>`)}
         ${row("Area", `<span class="num">${acres(d.ac)}</span>`)}
         ${row("Land", `<span class="num">${usd(d.lv)}</span>`)}
@@ -260,31 +276,79 @@
       </div>`;
   }
 
-  // ---------- owner view (exact owner-name match; related-LLC grouping comes in M3) ----------
-  let lastOwner = null;
-  function showOwner(o) {
-    const [name, t, n, ac, bb, ids, pts] = o;
-    lastOwner = o;
-    reqToken++;
-    setSelected(ids, pts);
-    drawer.hidden = false;
-    const P = PAL[theme()];
-    const list = ids.slice(0, 300).map((id) =>
-      `<li><button type="button" data-id="${esc(id)}">${esc(addrById.get(id) || "Account " + id)}</button></li>`).join("");
-    body.innerHTML = `
-      <span class="lbl type" style="--c:${P.t[t] || P.edgeStrong}"><i></i>${esc(TYPE_LABEL[t] || "Owner")}</span>
-      <h2>${esc(name)}</h2>
-      <p class="addr">${n.toLocaleString("en-US")} parcel${n === 1 ? "" : "s"} · ${acres(ac)}</p>
-      <p class="note">Parcels whose owner of record is exactly this name. Related LLCs that share a mailing address will be grouped in a later version.</p>
-      <ul class="plist">${list}</ul>
-      ${ids.length > 300 ? `<p class="addr">Showing 300 of ${ids.length.toLocaleString("en-US")}. All are highlighted on the map.</p>` : ""}`;
-    body.querySelectorAll(".plist button").forEach((b) => b.addEventListener("click", () =>
-      select(b.dataset.id, { fly: true, back: `<button type="button" class="back linkish">← ${esc(name)}</button>` })));
-    if (map) map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: drawerPad(), maxZoom: 17 });
+  // ---------- owner group view (hub and spoke; HANDOFF.md section 2) ----------
+  let lastGroup = null;
+  const plural = (n, w) => `${n.toLocaleString("en-US")} ${n === 1 ? w : w === "entity" ? "entities" : w + "s"}`;
+  const EV_LABEL = { address: "Same mailing address", "care-of": "Same care-of name" };
+
+  function hubOf(pts) {
+    // the parcel nearest the group's mean position, so the hub sits on real land
+    let mx = 0, my = 0, n = pts.length / 2;
+    for (let i = 0; i < pts.length; i += 2) { mx += pts[i] / n; my += pts[i + 1] / n; }
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < pts.length; i += 2) {
+      const dd = (pts[i] - mx) ** 2 + (pts[i + 1] - my) ** 2;
+      if (dd < bd) { bd = dd; best = i; }
+    }
+    return [pts[best], pts[best + 1]];
+  }
+
+  function showGroup(gid) {
+    loadIndex().then((d) => {
+      const g = d.groups[gid];
+      if (!g) return;
+      lastGroup = gid;
+      reqToken++;
+      const n = g.ids.length, multi = g.m.length > 1;
+      const hub = multi && n <= 400 ? { label: g.l, pt: hubOf(g.pts) } : null;
+      setSelected(g.ids, g.pts, hub);
+      drawer.hidden = false;
+      const P = PAL[theme()];
+      const ww = g.al && g.al.wealth_web
+        ? `<p class="addr"><a href="${esc(g.al.wealth_web)}" target="_blank" rel="noopener">Wealth Web profile ↗</a></p>` : "";
+      const why = multi ? `
+        <div class="lbl sec">Why these are grouped</div>
+        <ul class="ev">${g.ev.map(([k, v, c]) => `<li><span class="lbl">${esc(EV_LABEL[k] || k)}</span>${esc(v)} <span class="num dim">× ${c}</span></li>`).join("")}
+          ${g.ev.length ? "" : `<li>Owner names that match after normalizing spelling.</li>`}</ul>
+        <p class="note">This is an inference from SDAT mailing records, not a legal fact. A shared address usually means a common owner, but it can also be a property manager, lawyer or accountant. Confirm with deeds or LLC filings.</p>` : "";
+      const alias = g.al ? `<p class="note">Name from a researched alias. Sources: ${g.al.sources.map((s) =>
+        s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>` : esc(s.label)).join("; ")}</p>` : "";
+      const members = multi ? `
+        <div class="lbl sec">${plural(g.m.length, "entity")} of record</div>
+        <ul class="mlist">${g.m.map(([nm, c]) => `<li><span>${esc(nm)}</span><span class="num dim">${c}</span></li>`).join("")}</ul>` : "";
+      const list = g.ids.slice(0, 300).map((id) =>
+        `<li><button type="button" data-id="${esc(id)}">${esc(addrById.get(id) || "Account " + id)}</button></li>`).join("");
+      body.innerHTML = `
+        <span class="lbl type" style="--c:${P.t[g.t] || P.edgeStrong}"><i></i>${multi ? "Owner group · " : ""}${esc(TYPE_LABEL[g.t] || "Owner")}</span>
+        <h2>${esc(g.l)}</h2>
+        <p class="addr">${plural(n, "parcel")} · ${acres(g.ac)} · assessed ${usd(g.tv)}</p>
+        ${ww}${alias}${why}${members}
+        <div class="lbl sec">Parcels</div>
+        <ul class="plist">${list}</ul>
+        ${n > 300 ? `<p class="addr">Showing 300 of ${n.toLocaleString("en-US")}. All are highlighted on the map.</p>` : ""}`;
+      body.querySelectorAll(".plist button").forEach((b) => b.addEventListener("click", () =>
+        select(b.dataset.id, { fly: true, back: `<button type="button" class="back linkish">← ${esc(g.l)}</button>` })));
+      const bb = g.b;
+      if (map) map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: drawerPad(), maxZoom: 17 });
+    });
   }
   function wireBack() {
     const b = body.querySelector(".back");
-    if (b && lastOwner) b.addEventListener("click", () => showOwner(lastOwner));
+    if (b && lastGroup != null) b.addEventListener("click", () => showGroup(lastGroup));
+  }
+  // In the parcel drawer: link to the owner group when it holds more than this one name.
+  function fillGroupRow(d) {
+    const slot = body.querySelector("#grp-slot");
+    if (!slot || d.g == null) return;
+    loadIndex().then((idx) => {
+      const g = idx.groups[d.g];
+      if (!g || !body.contains(slot)) return;
+      const multi = g.m.length > 1;
+      if (!multi && g.ids.length < 2) { slot.remove(); return; }
+      slot.innerHTML = `<dt>${multi ? "Owner group" : "Same owner"}</dt><dd><button type="button" class="linkish grp-link">${esc(g.l)}</button>
+        <span class="sub">${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.ids.length, "parcel")} · ${acres(g.ac)}</span></dd>`;
+      slot.querySelector(".grp-link").addEventListener("click", () => showGroup(d.g));
+    }).catch(() => slot.remove());
   }
 
   // ---------- search: entity owners, addresses, ZIPs, cities, account numbers ----------
@@ -295,7 +359,8 @@
   function loadIndex() {
     if (!indexP) indexP = fetch("data/search.json").then((r) => r.json()).then((d) => {
       for (const [a, id] of d.addrs) addrById.set(id, a);
-      d.ownersU = d.owners.map((o) => o[0].toUpperCase());
+      // haystack: group label + every entity name in the group
+      d.groupsU = d.groups.map((g) => (g.l + "\n" + g.m.map((m) => m[0]).join("\n")).toUpperCase());
       d.addrsU = d.addrs.map((a) => a[0].toUpperCase());
       d.placesU = d.places.map((p) => p[0].toUpperCase());
       return d;
@@ -350,11 +415,12 @@
     places.slice(0, 4).forEach((p) => items.push({ kind: "place", p }));
 
     const pref = [], rest = [];
-    for (let i = 0; i < d.ownersU.length && pref.length < 8; i++) {
-      const h = d.ownersU[i];
-      if (h.startsWith(q)) pref.push(i); else if (rest.length < 8 && hasAll(h)) rest.push(i);
+    const nq = "\n" + q;
+    for (let i = 0; i < d.groupsU.length && pref.length < 8; i++) {
+      const h = "\n" + d.groupsU[i];
+      if (h.includes(nq)) pref.push(i); else if (rest.length < 8 && hasAll(h)) rest.push(i);
     }
-    [...pref, ...rest].slice(0, 8).forEach((i) => items.push({ kind: "owner", o: d.owners[i] }));
+    [...pref, ...rest].slice(0, 8).forEach((i) => items.push({ kind: "owner", gid: i, g: d.groups[i], q }));
 
     if (/\d/.test(q) || items.length < 6) {
       let n = 0;
@@ -377,7 +443,13 @@
       let main, sub = "";
       if (it.kind === "acct") main = `Go to account ${esc(it.label)}`;
       else if (it.kind === "place") { main = esc(it.p[1] === "zip" ? "ZIP " + it.p[0] : it.p[0]); sub = `${it.p[2].toLocaleString("en-US")} parcels`; }
-      else if (it.kind === "owner") { main = esc(it.o[0]); sub = `${it.o[2].toLocaleString("en-US")} parcel${it.o[2] === 1 ? "" : "s"} · ${acres(it.o[3])}`; }
+      else if (it.kind === "owner") {
+        const g = it.g, multi = g.m.length > 1;
+        // when the hit is a member name, say which one
+        const via = multi && !g.l.toUpperCase().includes(it.q) ? g.m.find(([nm]) => nm.toUpperCase().includes(it.q)) : null;
+        main = esc(g.l) + (via ? `<span class="via">via ${esc(via[0])}</span>` : "");
+        sub = `${multi ? plural(g.m.length, "entity") + " · " : ""}${plural(g.ids.length, "parcel")} · ${acres(g.ac)}`;
+      }
       else main = esc(it.a[0]);
       html += `<button type="button" class="res" data-i="${i}"><span>${main}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</button>`;
     });
@@ -396,7 +468,7 @@
     input.blur();
     if (it.kind === "acct") select(it.id, { fly: true, label: it.label });
     else if (it.kind === "addr") select(it.a[1], { fly: true });
-    else if (it.kind === "owner") showOwner(it.o);
+    else if (it.kind === "owner") showGroup(it.gid);
     else if (it.kind === "place" && map) {
       closeDrawer();
       const b = it.p[3];

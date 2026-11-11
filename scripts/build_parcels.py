@@ -5,7 +5,7 @@ Inputs:  data/raw/pages/*.geojson          (from fetch_parcels.py)
 Outputs: data/build/parcels.geojsonl        one feature per line, tiny props, for tippecanoe
          web/data/parcels/<NNN>.json        detail records, sharded by last 3 digits of the id
          web/data/meta.json                 data date, counts, source attribution
-         web/data/search.json               search index: entity owners, entity addresses, ZIPs, cities
+         web/data/search.json               search index: owner groups, entity addresses, ZIPs, cities
                                             (private parcels are never in it, only in ZIP/city counts)
 
 Owner-type codes used in tiles and details (colors in web/style.css):
@@ -25,6 +25,8 @@ import re
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+from build_owner_groups import address_key, build_groups, careof_entity
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGES = ROOT / "data" / "raw" / "pages"
@@ -56,7 +58,9 @@ REL = [
     "AMERICAN LEGION", "VFW", "VETERANS OF FOREIGN WARS", "CEMETERY", "LAND TRUST", "CONSERVANCY",
     "BOYS AND GIRLS", "YMCA", "HABITAT FOR HUMANITY", "VOLUNTEER FIRE", "RESCUE SQUAD",
     "IGLESIA", "EVANGELICA", "DIOS", "ASSEMBLY OF GOD", "CRCH", "CHRCH", "CHAPEL", "ASSOCIATION",
-    "OWNERS", "COMMUNITY", "MASTER", "ASSOCIA",
+    "OWNERS", "COMMUNITY", "MASTER", "ASSOCIA", "ASSN", "COMMNTY", "COMNTY", "HOMEOWNRS", "HOMEOWNR",
+    "HMOWNRS", "HMWNRS", "HMOWRS", "HMONRS", "HMNWNRS", "HMOWNERS", "HMOWNRS", "HMWNRS", "HOMEOWNERS",
+    "HOMEOWNRS", "HMOWRS", "HMOWNR", "HMWNR", "CLUSTER ASSN", "CONDO", "CONDOMINIUMS",
 ]
 INST = [
     "REIT", "REALTY TRUST", "PROPERTY TRUST", "PROPERTIES TRUST", "INVESTMENT TRUST",
@@ -78,7 +82,7 @@ CORP = [
     "PROPERTIES", "PROPERTY", "VENTURES", "INVESTMENTS", "INVESTORS", "INVESTMENT", "DEVELOPMENT",
     "DEVELOPERS", "ENTERPRISES", "GROUP", "REALTY", "PLC", "LLLP", "PTNSHP", "PTNSH", "BUILDERS", "HOMES",
     "MALL", "SHOP CNTR", "SHOPPING", "SHOP CTR", "SHOPPING CENTER", "TOWN CENTER", "TOWNE CENTRE", "PLAZA LLC", "REGNAL", "REGIONAL",
-    "CAPITAL", "FUND", "EQUITIES", "EQUITY", "MANAGEMENT", "APARTMENTS", "ASSOC", "ASSN", "DST", "HOMEBUYER",
+    "CAPITAL", "FUND", "EQUITIES", "EQUITY", "MANAGEMENT", "APARTMENTS", "ASSOC", "DST", "HOMEBUYER",
     "RAILROAD", "RAILWAY", "ELECTRIC", "TELEPHONE", "GAS LIGHT", "POWER CO",
 ]
 # A personal trust or estate is a person for privacy purposes.
@@ -187,7 +191,7 @@ def main():
     seen = set()
     types, n_private, n_dupe, n_nogeom = Counter(), 0, 0, 0
     max_import = 0
-    owners = {}           # owner name -> {t, ids, ac, pts}   (entity / non-private only)
+    entities = []         # non-private parcels, input to owner grouping
     addrs = []            # [address, id] for non-private parcels
     places = {}           # ("zip"|"city", label) -> [points]
 
@@ -248,23 +252,31 @@ def main():
                         "lf": f"{lib}/{fol}" if lib and fol and lib.strip("0") else None,
                     })
                     if name and name != "UNKNOWN":
-                        g = owners.setdefault(name, {"t": t, "ids": [], "ac": 0.0, "pts": []})
-                        g["ids"].append(pid)
-                        g["ac"] += p.get("LAND_AREA_ACRE") or 0
-                        g["pts"].append(c)
+                        entities.append({
+                            "id": pid, "name": name, "t": t, "c": c, "mail": d["ma"],
+                            "akey": address_key(p.get("MAIL_STREET"), p.get("ICO_NAME"), p.get("MAIL_ZIP5")),
+                            "coe": careof_entity(p.get("ICO_NAME")),
+                            "ac": p.get("LAND_AREA_ACRE"), "tv": p.get("CURR_ASSESS"),
+                        })
                     if d.get("a"):
                         addrs.append([d["a"], pid])
                 d = {k: v for k, v in d.items() if v not in (None, "", 0) or k in ("lv", "iv", "tv")}
                 shards.setdefault(pid[-3:].rjust(3, "0"), {})[pid] = d
 
+    pid_gid, groups = build_groups(entities)
+    for pid, gid in pid_gid.items():
+        shards[pid[-3:].rjust(3, "0")][pid]["g"] = gid
+
     for key, recs in shards.items():
         (SHARDS / f"{key}.json").write_text(json.dumps(recs, separators=(",", ":")))
 
     search = {
-        # [name, type, parcel count, acres, bbox, ids, flat centroids [x0,y0,x1,y1,...]]
-        "owners": sorted(([n, g["t"], len(g["ids"]), round(g["ac"], 2), bbox(g["pts"]), g["ids"],
-                           [round(v, 4) for pt in g["pts"] for v in pt]]
-                          for n, g in owners.items()), key=lambda r: -r[3]),
+        # index in this list == the "g" id stored on each parcel detail record
+        "groups": [{
+            "l": g["label"], "ls": g["label_src"], "t": g["t"], "ac": g["ac"], "tv": g["tv"],
+            "b": bbox(g["pts"]), "ids": g["ids"], "pts": [round(v, 4) for pt in g["pts"] for v in pt],
+            "m": g["members"], "ev": g["evidence"], **({"al": g["alias"]} if "alias" in g else {}),
+        } for g in groups],
         "addrs": addrs,
         # [label, kind, parcel count, bbox]  (trim 2% outliers: stray geocodes)
         "places": sorted(([label, kind, len(pts), bbox(pts, 0.02)]
@@ -272,7 +284,7 @@ def main():
                          key=lambda r: -r[2]),
     }
     (WEB_DATA / "search.json").write_text(json.dumps(search, separators=(",", ":")))
-    print(f"search: {len(search['owners'])} owners, {len(addrs)} addresses, {len(search['places'])} places")
+    print(f"search: {len(search['groups'])} owner groups, {len(addrs)} addresses, {len(search['places'])} places")
 
     as_of = datetime.fromtimestamp(max_import / 1000, tz=timezone.utc) if max_import else None
     meta = {

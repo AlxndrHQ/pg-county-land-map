@@ -25,8 +25,18 @@ web/                       static site (MapLibre GL + pmtiles), deployed to GitH
 Rebuild: `python3 scripts/fetch_parcels.py && python3 scripts/build_parcels.py && scripts/build_tiles.sh`
 Preview: `cd web && python3 -m http.server 8000`. The server must support Range requests for PMTiles; Python's doesn't, so use `npx http-server web -p 8000` instead.
 
+## Owner groups (M3)
+`scripts/build_owner_groups.py` links entity owners by identical name, identical mailing address (to the suite/floor) and identical care-of entity, with guards against registered agents, tax services, PO boxes and HOA managers. Groups are leads, not facts, and the UI says so.
+`data/owner_aliases.json` is hand-researched. Each entry labels a group and can merge entities the mailing data misses:
+```json
+[{ "label": "Douglas Development (Jemal family)", "match": ["DOUGLAS DEV CORP", "JEMAL S BRIGHTSEAT L L C"],
+   "sources": [{ "label": "SDAT care-of on acct 13-XXXXXXX", "url": "https://..." }],
+   "wealth_web": "https://alxndrhq.github.io/historical-wealth-mind-map/#/p/<id>" }]
+```
+The build fails if an alias has no `sources`.
+
 ## Data source note
 M1 uses the PG County DPIE "Property Flattened" layer (PG-only, already joined to SDAT). MD iMAP was down for maintenance on 2026-11-10. Keep MD iMAP Parcel Boundaries as the statewide cross-check.
 
 ## Milestones
-M1 parcels on a map (done) → M2 search (done: exact owner name, entity addresses, ZIP, city, account) → M3 owner groups → M4 case files → M5 planning overlay → M6 leaderboard. Details are in HANDOFF.md §6.
+M1 parcels on a map (done) → M2 search (done: exact owner name, entity addresses, ZIP, city, account) → M3 owner groups (done) → M4 case files → M5 planning overlay → M6 leaderboard. Details are in HANDOFF.md §6.
