@@ -1,0 +1,18 @@
+{
+  "as_of": "2026-11-10",
+  "as_of_label": "Nov 2026",
+  "built": "2026-11-11",
+  "parcels": 314490,
+  "private": 261062,
+  "by_type": {
+    "c": 35854,
+    "p": 263629,
+    "g": 9317,
+    "r": 5363,
+    "i": 327
+  },
+  "source": {
+    "label": "Prince George's County DPIE, Property Flattened (parcel shapes + SDAT)",
+    "url": "https://gis.princegeorgescountymd.gov/arcgis/rest/services/DPIE/SERVICES4PLS/MapServer/19"
+  }
+}

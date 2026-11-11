@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ground Truth — Land Ownership in Prince George's County</title>
+<meta name="description" content="An open-data map of Prince George's County, Maryland that answers one question: who owns the land under this?">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 3h7v5H2zM9 8h5v5H9z' fill='none' stroke='%238A5A2B' stroke-width='1.2'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<link href="style.css" rel="stylesheet">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="row1">
+      <div class="brand">
+        <h1>Ground Truth</h1>
+        <small>Who owns the land · Prince George's County, MD</small>
+      </div>
+      <nav class="tabs">
+        <a class="tablink" href="https://alxndrhq.github.io/historical-wealth-mind-map/" target="_blank" rel="noopener">Wealth Web ↗</a>
+        <button class="theme" id="theme" type="button" aria-label="Toggle light and dark">Ink</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div id="map" aria-label="Map of parcels in Prince George's County"></div>
+
+    <div class="hint" id="hint">Zoom in to see parcels</div>
+
+    <div class="legend" id="legend" aria-label="Owner type">
+      <span class="lbl">Owner</span>
+      <span class="key"><i style="--c:var(--t-c)"></i>Corporate / LLC</span>
+      <span class="key"><i style="--c:var(--t-i)"></i>Institutional</span>
+      <span class="key"><i style="--c:var(--t-g)"></i>Government</span>
+      <span class="key"><i style="--c:var(--t-r)"></i>Religious / nonprofit</span>
+      <span class="key"><i style="--c:var(--edge-strong)"></i>Individual</span>
+    </div>
+
+    <aside class="drawer" id="drawer" hidden aria-live="polite">
+      <button class="close" id="close" type="button" aria-label="Close">×</button>
+      <div id="drawer-body"></div>
+    </aside>
+
+    <footer class="foot">
+      <span id="asof">Parcel data: MD iMAP, MDP, SDAT · PG County DPIE</span>
+      <button type="button" id="limits-btn" class="linkish">Limits</button>
+    </footer>
+
+    <div class="limits" id="limits" hidden>
+      <button class="close" data-close="limits" type="button" aria-label="Close">×</button>
+      <div class="lbl">Read this map with care</div>
+      <ul>
+        <li>SDAT data lags real-world transfers by weeks to months.</li>
+        <li>Parcels come from an assessment and tax dataset, not a legal survey. Boundaries are approximate.</li>
+        <li>Maryland LLCs need not list their members. Some ownership trails end at a registered agent or a law firm. This map says so rather than guess.</li>
+        <li>The land owner is not always the building owner or the operator (ground leases).</li>
+        <li>Owner types are inferred from the owner's name with keyword rules and can be wrong.</li>
+        <li>Privacy: for homes owned by individuals, this map doesn't show the owner's name or mailing address. Follow the SDAT link for the public record.</li>
+      </ul>
+    </div>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
