@@ -510,13 +510,18 @@
   const PKEY = "rem.projects.v1";
   let projects = [], storageOK = true;
   try { projects = JSON.parse(localStorage.getItem(PKEY) || "[]"); } catch (e) { storageOK = false; projects = []; }
+  for (const p of projects) {           // v1 had one free-text "notes" field; keep it as the first log entry
+    if (!Array.isArray(p.log)) p.log = [];
+    if (p.notes && p.notes.trim()) p.log.push({ id: "n" + Date.parse(p.updated || p.created || 0).toString(36), at: p.updated || new Date().toISOString(), kind: "note", text: p.notes.trim(), sent: false });
+    delete p.notes;
+  }
   function saveProjects() {
     try { localStorage.setItem(PKEY, JSON.stringify(projects)); storageOK = true; } catch (e) { storageOK = false; }
     renderProjMenu();
   }
   const newId = () => "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   function createProject(name, ids = []) {
-    const p = { id: newId(), name: name.trim() || "Untitled project", ids: [...ids], notes: "", doc: "",
+    const p = { id: newId(), name: name.trim() || "Untitled project", ids: [...ids], log: [], doc: "",
                 created: new Date().toISOString(), updated: new Date().toISOString() };
     projects.unshift(p); saveProjects(); return p;
   }
@@ -530,7 +535,9 @@
     projMenu.innerHTML = `
       ${projects.map((p) => `<button type="button" class="res" data-p="${p.id}"><span>${esc(p.name)}</span><span class="sub">${plural(p.ids.length, "parcel")}</span></button>`).join("")}
       <form class="newproj"><input name="n" placeholder="New project name" aria-label="New project name" maxlength="80"><button class="linkish" type="submit">Create</button></form>
-      <p class="hint2">Projects are saved in this browser only. ${storageOK ? "" : "<b>This browser is blocking storage, so projects will be lost on reload.</b>"}</p>`;
+      <p class="hint2">Projects are saved in this browser only. ${storageOK ? "" : "<b>This browser is blocking storage, so projects will be lost on reload.</b>"}</p>
+      <p class="hint2"><button type="button" class="linkish" data-sync>${syncCfg.url ? "Google Doc: connected" : "Connect Google Doc"}</button>${syncCfg.url ? "" : " to send project notes to Drive"}</p>`;
+    projMenu.querySelector("[data-sync]").addEventListener("click", () => { projMenu.hidden = true; showSyncSettings(); });
     projMenu.querySelectorAll("[data-p]").forEach((b) => b.addEventListener("click", () => { projMenu.hidden = true; showProject(b.dataset.p); }));
     projMenu.querySelector(".newproj").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -540,7 +547,6 @@
   }
   projBtn.addEventListener("click", (e) => { e.stopPropagation(); projMenu.hidden = !projMenu.hidden; });
   document.addEventListener("click", (e) => { if (!e.target.closest("#proj-menu, #proj-btn")) projMenu.hidden = true; });
-  renderProjMenu();
 
   // "Add to project" in the parcel drawer
   function addProjectControl(id, d) {
@@ -604,8 +610,21 @@
         ${sales.length ? `<div class="lbl sec">Sales, newest first</div><ul class="sales tl">${sales.map((r) => `
           <li><span class="num">${esc(date(r.d))}</span> <span class="num">${r.p ? usd(r.p) : "no price"}</span>
           <span class="sub">${esc(r.where)}${r.who ? " · " + esc(r.who) : ""}${r.deed ? " · deed " + esc(r.deed) : ""}</span></li>`).join("")}</ul>` : ""}
-        <div class="lbl sec">Notes</div>
-        <textarea class="pnotes" rows="6" placeholder="Your research notes, with links. Saved as you type.">${esc(p.notes || "")}</textarea>
+        <div class="lbl sec">Notes and questions</div>
+        <form class="noteform">
+          <textarea name="t" rows="3" placeholder="Write a note or a question about this project…" aria-label="New note"></textarea>
+          <div class="noterow">
+            <select name="k" aria-label="Type"><option value="note">Note</option><option value="question">Question</option></select>
+            <button class="linkish" type="submit">Add</button>
+            <span class="syncstat">${syncCfg.url
+              ? `Sends to ${syncCfg.doc ? `<a href="${esc(syncCfg.doc)}" target="_blank" rel="noopener">Project Notes ↗</a>` : "your Project Notes doc"}`
+              : `Saved in this browser · <button type="button" class="linkish" data-sync>Connect Google Doc</button>`}</span>
+          </div>
+        </form>
+        <ul class="nlog">${(p.log || []).slice().reverse().map((n) => `
+          <li><span class="sub">${esc(new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}
+            · ${n.kind === "question" ? "Question" : "Note"} · ${n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only"}</span>
+            <span class="ntext">${esc(n.text)}</span></li>`).join("")}</ul>
         <div class="lbl sec">Research doc</div>
         <div class="pdoc"><input class="pdocin" placeholder="Paste a Google Doc link" value="${esc(doc)}"> ${docLink}</div>
         <div class="pact"><button type="button" class="linkish" data-export>Export</button>
@@ -618,8 +637,16 @@
       const nm = body.querySelector(".pname");
       nm.addEventListener("blur", () => { const v = nm.textContent.trim(); if (v && v !== p.name) { p.name = v.slice(0, 80); touch(p); } });
       nm.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); nm.blur(); } });
-      let t = 0;
-      body.querySelector(".pnotes").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { p.notes = e.target.value; touch(p); }, 400); });
+      const nf = body.querySelector(".noteform");
+      const addNote = () => {
+        const text = nf.t.value.trim(); if (!text) return;
+        p.log = p.log || [];
+        p.log.push({ id: newId(), at: new Date().toISOString(), kind: nf.k.value, text, sent: false });
+        touch(p); showProject(p.id); syncPending();
+      };
+      nf.addEventListener("submit", (e) => { e.preventDefault(); addNote(); });
+      nf.t.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addNote(); } });
+      const sl = body.querySelector(".syncstat [data-sync]"); if (sl) sl.addEventListener("click", showSyncSettings);
       body.querySelector(".pdocin").addEventListener("change", (e) => { p.doc = e.target.value.trim(); touch(p); showProject(p.id); });
       body.querySelector("[data-export]").addEventListener("click", () => {
         const blob = new Blob([JSON.stringify(p, null, 2)], { type: "application/json" });
@@ -638,6 +665,99 @@
     });
   }
   let lastProject = null;
+
+
+  // ---------- send project notes to a Google Doc (via the owner's Apps Script web app) ----------
+  // The map is a public static site, so it cannot write to Drive by itself. The owner deploys
+  // scripts/apps-script/project-notes.gs from inside their "Project Notes" doc; this page then
+  // POSTs each note there with a private key. URL and key live only in this browser.
+  const SKEY = "rem.notesync.v1";
+  let syncCfg = {};
+  try { syncCfg = JSON.parse(localStorage.getItem(SKEY) || "{}"); } catch (e) { syncCfg = {}; }
+  const saveSync = () => { try { localStorage.setItem(SKEY, JSON.stringify(syncCfg)); } catch (e) {} };
+  const validUrl = (u) => /^https:\/\/script\.google(usercontent)?\.com\//.test(u || "");
+  const mapBase = location.origin + location.pathname;
+
+  async function parcelRefs(p) {
+    const rows = await loadMany(p.ids.slice(0, 50));
+    return rows.filter(([, d]) => d).map(([, d]) => ({
+      label: [d.a || "No site address", d.pv ? "individually owned" : d.o, "acct " + d.acct].filter(Boolean).join(" · "),
+      url: d.c ? `${mapBase}#map=17/${d.c[1]}/${d.c[0]}` : mapBase,
+    }));
+  }
+  async function sendNote(p, n) {
+    const payload = { key: syncCfg.key, project: p.name, kind: n.kind, text: n.text, at: n.at, parcels: await parcelRefs(p) };
+    // text/plain body = a "simple" cross-origin request, which Apps Script web apps accept without a preflight
+    const r = await fetch(syncCfg.url, { method: "POST", body: JSON.stringify(payload) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "not saved");
+  }
+  let syncing = false;
+  async function syncPending() {
+    if (syncing || !syncCfg.url || !syncCfg.key) return;
+    syncing = true;
+    let sent = 0, failed = null;
+    try {
+      for (const p of projects) for (const n of p.log || []) {
+        if (n.sent) continue;
+        try { await sendNote(p, n); n.sent = true; sent++; saveProjects(); }
+        catch (e) { failed = e; break; }
+      }
+    } finally { syncing = false; }
+    if (failed) toast(`A note couldn't reach Google Docs (${failed.message}). It stays saved here and will retry.`);
+    else if (sent) toast(sent === 1 ? "Note sent to Google Docs." : `${sent} notes sent to Google Docs.`);
+    if (sent && lastProject && !drawer.hidden && body.querySelector(".nlog")) showProject(lastProject);
+  }
+  function toast(msg) {
+    let t = document.getElementById("toast");
+    if (!t) { t = Object.assign(document.createElement("div"), { id: "toast", className: "toast", role: "status" }); document.body.appendChild(t); }
+    t.textContent = msg; t.hidden = false; clearTimeout(t._h); t._h = setTimeout(() => (t.hidden = true), 4000);
+  }
+
+  function showSyncSettings() {
+    reqToken++;
+    drawer.hidden = false;
+    setSelected([]);
+    body.innerHTML = `
+      <span class="lbl">Project notes · Google Doc</span>
+      <h2>Connect Google Doc</h2>
+      <p class="addr">Notes and questions you add to a project are sent to your "Real Estate Map · Project Notes" doc, newest first. Nothing is stored on this website; the link and key below stay in this browser.</p>
+      <ol class="steps">
+        <li>Open the Project Notes doc, then <b>Extensions › Apps Script</b>.</li>
+        <li>Replace Code.gs with <a href="https://github.com/AlxndrHQ/pg-county-land-map/blob/main/scripts/apps-script/project-notes.gs" target="_blank" rel="noopener">this script ↗</a> and save.</li>
+        <li>Run <b>setup</b> once, approve the prompt, and copy the key from the Execution log.</li>
+        <li><b>Deploy › New deployment › Web app</b>: execute as Me, access Anyone. Copy the Web app URL.</li>
+        <li>Paste both below and press Test.</li>
+      </ol>
+      <form class="syncform">
+        <label>Web app URL<input name="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(syncCfg.url || "")}" autocomplete="off"></label>
+        <label>Key<input name="key" type="password" placeholder="From the setup() log" value="${esc(syncCfg.key || "")}" autocomplete="off"></label>
+        <label>Doc link (optional, for an "open" link)<input name="doc" placeholder="https://docs.google.com/document/d/…" value="${esc(syncCfg.doc || "")}" autocomplete="off"></label>
+        <div class="pact"><button class="linkish" type="submit">Test and save</button>
+          ${syncCfg.url ? `<button type="button" class="linkish danger" data-disc>Disconnect</button>` : ""}
+          <span class="syncmsg sub"></span></div>
+      </form>`;
+    const f = body.querySelector(".syncform"), msg = body.querySelector(".syncmsg");
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const url = f.url.value.trim(), key = f.key.value.trim(), doc = f.doc.value.trim();
+      if (!validUrl(url)) { msg.textContent = "That isn't an Apps Script web app URL."; return; }
+      if (!key) { msg.textContent = "Add the key from setup()."; return; }
+      msg.textContent = "Testing…";
+      try {
+        const r = await fetch(`${url}?key=${encodeURIComponent(key)}`);
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error === "bad key" ? "the key doesn't match" : j.error || "no answer");
+        syncCfg = { url, key, doc: /^https:\/\/docs\.google\.com\//.test(doc) ? doc : "" }; saveSync();
+        msg.textContent = `Connected to "${j.doc}".`;
+        renderProjMenu(); syncPending();
+      } catch (err) { msg.textContent = `Couldn't connect: ${err.message}. Check the URL, the key, and that access is set to Anyone.`; }
+    });
+    const d = body.querySelector("[data-disc]");
+    if (d) d.addEventListener("click", () => { syncCfg = {}; saveSync(); renderProjMenu(); showSyncSettings(); });
+  }
+  renderProjMenu();
+  syncPending();
 
   // ---------- footer + limits ----------
   let asOfLabel = null;

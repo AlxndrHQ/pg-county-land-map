@@ -47,6 +47,7 @@ The build fails if an alias has no `sources`.
 
 ## Projects
 User-created research projects live only in the viewer's browser (localStorage key `rem.projects.v1`), with an Export button. The site never generates projects on its own.
+Each project has a notes-and-questions log. If the owner connects a Google Doc (Projects › Connect Google Doc), every entry is POSTed to a Google Apps Script web app bound to the Drive doc "Real Estate Map · Project Notes" (`scripts/apps-script/project-notes.gs`), which inserts it newest first. The web app URL and key are stored only in the browser (`rem.notesync.v1`); never commit them. Unsent entries retry on load.
 
 ## Data source note
 M1 uses the PG County DPIE "Property Flattened" layer (PG-only, already joined to SDAT). MD iMAP was down for maintenance on 2026-11-10. Keep MD iMAP Parcel Boundaries as the statewide cross-check.
