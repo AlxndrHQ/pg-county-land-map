@@ -18,8 +18,15 @@
  * Answers: write an answer as a paragraph under the note that starts with "↳" or "Answer"
  * (e.g. "↳ Answer (Claude): ..."). The map reads them back and shows them under the note.
  *
- * Automatic answers (optional, free): questions get answered by Gemini with Google Search
- * a minute or so after you post them.
+ * Automatic answers by Claude (Max plan, no API key): posting a question opens an empty issue
+ * in a private GitHub repo, which starts the Claude Code routine "Real Estate Map: answer new
+ * questions"; it answers every open question in this doc a few minutes later. Script Properties:
+ *   GITHUB_TOKEN = fine-grained token, only that repo, Issues: read and write
+ *   GITHUB_REPO  = AlxndrHQ/rem-answer-queue
+ * The issue holds no question text. When these are set, Gemini (below) is not used.
+ *
+ * Automatic answers by Gemini (alternative): questions get answered by Gemini with Google Search
+ * a minute or so after you post them. Needs a key with quota (the free tier may have none).
  *   1. Get a free key at https://aistudio.google.com/apikey (Create API key).
  *   2. Here: Project Settings (gear) › Script Properties › Add property
  *        GEMINI_API_KEY = <your key>   › Save.
@@ -62,7 +69,7 @@ function doGet(e) {
   if (!keyOk_(p.key)) return json_({ ok: false, error: 'bad key' });
   const doc = openDoc_();
   if (p.answers !== '1') return json_({ ok: true, doc: doc.getName() });
-  return json_({ ok: true, doc: doc.getName(), auto: !!geminiKey_(), entries: entries_(doc.getBody()) });
+  return json_({ ok: true, doc: doc.getName(), auto: claudeTrigger_() ? 'claude' : geminiKey_() ? 'gemini' : '', entries: entries_(doc.getBody()) });
 }
 
 const ANSWER = /^\s*(↳|answer\b|a:)/i;
@@ -119,7 +126,10 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
-  if (isQuestion_(text) && geminiKey_()) scheduleAnswers_();
+  if (isQuestion_(text)) {
+    if (claudeTrigger_()) pingClaude_();
+    else if (geminiKey_()) scheduleAnswers_();
+  }
   return json_({ ok: true });
 }
 
@@ -135,6 +145,37 @@ const SYSTEM = [
 ].join(' ');
 
 function isQuestion_(t) { return QUESTION.test(String(t || '')); }
+
+function claudeTrigger_() {
+  const p = PropertiesService.getScriptProperties();
+  const token = p.getProperty('GITHUB_TOKEN'), repo = p.getProperty('GITHUB_REPO');
+  return token && /^[\w.-]+\/[\w.-]+$/.test(repo || '') ? { token: token, repo: repo } : null;
+}
+
+/** Starts the Claude routine. At most one start per 30 s; one run answers every open question. */
+function pingClaude_() {
+  const props = PropertiesService.getScriptProperties();
+  const last = Number(props.getProperty('CLAUDE_LAST_PING') || 0);
+  if (Date.now() - last < 30 * 1000) return;
+  props.setProperty('CLAUDE_LAST_PING', String(Date.now()));
+  const t = claudeTrigger_();
+  try {
+    const when = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm');
+    const r = UrlFetchApp.fetch('https://api.github.com/repos/' + t.repo + '/issues', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + t.token, Accept: 'application/vnd.github+json' },
+      payload: JSON.stringify({ title: 'New question ' + when, body: 'Answer every open question in Project Notes.' }),
+    });
+    Logger.log('Claude routine trigger: HTTP ' + r.getResponseCode() + ' ' + r.getContentText().slice(0, 200));
+  } catch (err) { Logger.log('Claude routine trigger failed: ' + err.message); }
+}
+
+/** Run from the editor to check the Claude trigger without posting a question. */
+function testClaudeTrigger() {
+  if (!claudeTrigger_()) throw new Error('Add GITHUB_TOKEN and GITHUB_REPO under Project Settings › Script Properties first.');
+  PropertiesService.getScriptProperties().deleteProperty('CLAUDE_LAST_PING');
+  pingClaude_();
+}
 function geminiKey_() { return PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY'); }
 
 /** Run once from the editor after adding GEMINI_API_KEY: approves permissions and picks a model. */

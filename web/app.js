@@ -1114,7 +1114,7 @@
         if (!j.ok) throw new Error(j.error === "bad key" ? "the key doesn't match" : j.error || "no answer");
         syncCfg = { url, key, doc: /^https:\/\/docs\.google\.com\//.test(doc) ? doc : "" }; saveSync();
         msg.textContent = `Connected to "${j.doc}". ` + (Array.isArray(j.entries)
-          ? `Answers: on (${j.entries.filter((x) => x.answers && x.answers.length).length} answered so far). Automatic answers: ${j.auto ? "on (Gemini)" : "off (no GEMINI_API_KEY yet)"}.`
+          ? `Answers: on (${j.entries.filter((x) => x.answers && x.answers.length).length} answered so far). Automatic answers: ${j.auto === "claude" ? "on (Claude)" : j.auto ? "on (Gemini)" : "off"}.`
           : "Answers: off. This is the older script; paste the new version and deploy a new version to see answers on the map.");
         lastAnswers = 0; fetchAnswers(true);
         renderProjMenu(); syncPending();
