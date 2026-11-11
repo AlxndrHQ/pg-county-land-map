@@ -219,3 +219,4 @@ main{flex:1;min-height:0;position:relative}
 .sw{width:14px;height:14px;border-radius:50%;border:0;padding:0;outline:1px solid transparent;outline-offset:2px}
 .swatches.big .sw{width:18px;height:18px}
 .sw[aria-pressed="true"]{outline-color:var(--text)}
+.kbd{font:500 10px var(--mono);color:var(--dim);margin-left:-6px}

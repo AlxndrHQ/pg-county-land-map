@@ -648,7 +648,7 @@
               ${rest.map((p) => `<option value="${p.id}">${esc(p.name)} (adds parcel)</option>`).join("")}
               <option value="__new">New project</option>
             </select>
-            <button class="linkish" type="submit">Add</button>
+            <button class="linkish" type="submit" title="Add (⌘↵ or Ctrl+Enter)">Add</button><span class="kbd">⌘↵</span>
           </div>
           <span class="syncstat">${syncCfg.url ? "Sends to your Project Notes doc" : `Saved in this browser · <button type="button" class="linkish" data-sync>Connect Google Doc</button>`}</span>
         </form>
@@ -717,7 +717,7 @@
         <form class="noteform" data-p="${p.id}">
           <textarea name="t" rows="3" placeholder="Write a note or a question about this project…" aria-label="New note"></textarea>
           <div class="noterow">
-            <button class="linkish" type="submit">Add</button>
+            <button class="linkish" type="submit" title="Add (⌘↵ or Ctrl+Enter)">Add</button><span class="kbd">⌘↵</span>
             <span class="syncstat">${syncCfg.url
               ? `Sends to ${syncCfg.doc ? `<a href="${esc(syncCfg.doc)}" target="_blank" rel="noopener">Project Notes ↗</a>` : "your Project Notes doc"}`
               : "Saved in this browser"}</span>
