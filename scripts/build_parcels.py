@@ -33,6 +33,19 @@ PAGES = ROOT / "data" / "raw" / "pages"
 BUILD = ROOT / "data" / "build"
 WEB_DATA = ROOT / "web" / "data"
 SHARDS = WEB_DATA / "parcels"
+SALES_HISTORY = ROOT / "data" / "history" / "sales.json"   # from fetch_sales.py (cumulative)
+
+
+def sale_history(hist, pid, sd, sp, lf, private):
+    """Merge the cumulative state sales history with the parcel's current last sale.
+    Private parcels keep date and price only (no deed references)."""
+    out = [dict(r) for r in hist.get(pid, [])]
+    if sd and not any(r["d"] == sd for r in out):
+        out.append({k: v for k, v in {"d": sd, "p": sp, "deed": lf}.items() if v})
+    out.sort(key=lambda r: r["d"], reverse=True)
+    if private:
+        out = [{k: v for k, v in r.items() if k in ("d", "p")} for r in out]
+    return out
 
 # --- owner-type keyword lists (matched on whole words / phrases after normalization) ---
 GOV = [
@@ -191,6 +204,7 @@ def main():
     seen = set()
     types, n_private, n_dupe, n_nogeom = Counter(), 0, 0, 0
     max_import = 0
+    hist = json.loads(SALES_HISTORY.read_text())["sales"] if SALES_HISTORY.exists() else {}
     entities = []         # non-private parcels, input to owner grouping
     addrs = []            # [address, id] for non-private parcels
     places = {}           # ("zip"|"city", label) -> [points]
@@ -260,6 +274,10 @@ def main():
                         })
                     if d.get("a"):
                         addrs.append([d["a"], pid])
+                lf_raw = f"{lib.lstrip('0')}/{fol.lstrip('0') or '0'}" if lib and fol and lib.strip("0") else None
+                sh = sale_history(hist, pid, d.get("sd"), d.get("sp"), lf_raw, private)
+                if len(sh) > 1 or (sh and sh[0]["d"] != d.get("sd")):
+                    d["sh"] = sh
                 d = {k: v for k, v in d.items() if v not in (None, "", 0) or k in ("lv", "iv", "tv")}
                 shards.setdefault(pid[-3:].rjust(3, "0"), {})[pid] = d
 

@@ -212,6 +212,7 @@
       body.innerHTML = (opts.back ? opts.back : "") + render(d);
       wireBack();
       fillGroupRow(d);
+      addProjectControl(id, d);
       if (opts.fly && d.c && map) map.flyTo({ center: d.c, zoom: Math.max(map.getZoom(), 16.5), padding: drawerPad() });
     }).catch((e) => {
       if (token === reqToken) body.innerHTML = `<div class="lbl">Couldn't load parcel details</div><p class="note">${esc(e.message)}</p>`;
@@ -221,7 +222,12 @@
   function closeDrawer() { drawer.hidden = true; setSelected([]); }
   const drawerPad = () => (innerWidth > 640 ? { right: 400, top: 40, bottom: 40, left: 40 } : { bottom: innerHeight * 0.62, top: 20, left: 20, right: 20 });
   document.getElementById("close").addEventListener("click", closeDrawer);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeDrawer(); limits.hidden = true; } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const el = document.activeElement;
+    if (el && (el.isContentEditable || el.tagName === "TEXTAREA")) { el.blur(); return; }
+    closeDrawer(); limits.hidden = true;
+  });
 
   // ---------- formatting ----------
   function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -233,6 +239,12 @@
     return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
   }
   const row = (k, v) => (v == null || v === "" ? "" : `<dt>${k}</dt><dd>${v}</dd>`);
+
+  function salesList(sh) {
+    return `<ul class="sales">${sh.map((r) => `<li><span class="num">${esc(date(r.d))}</span>
+      <span class="num">${r.p ? usd(r.p) : "no price"}</span>
+      ${r.deed ? `<span class="sub">deed ${esc(r.deed)}${r.prior ? ` · seller's deed ${esc(r.prior)}` : ""}</span>` : ""}</li>`).join("")}</ul>`;
+  }
 
   function taxStatus(d) {
     if (!d.ex) return `Taxable`;
@@ -254,6 +266,7 @@
       ${typeDot}
       <h2>${title}</h2>
       <p class="addr">${esc(d.a || "No site address on record")}</p>
+      <div id="proj-slot"></div>
       ${privacyNote}
       <dl>
         ${d.pv ? "" : row("Mailing", [d.co, d.ma].filter(Boolean).map(esc).join("<br>") || "—")}
@@ -264,7 +277,7 @@
         ${row("Building", `<span class="num">${usd(d.iv)}</span>`)}
         ${row("Assessed", `<span class="num">${usd(d.tv)}</span>`)}
         ${row("Tax status", taxStatus(d))}
-        ${row("Last sale", sale && `<span class="num">${sale}</span>`)}
+        ${d.sh ? row(`Sales <span class="dim">${d.sh.length}</span>`, salesList(d.sh)) : row("Last sale", sale && `<span class="num">${sale}</span>`)}
         ${row("Deed", d.lf && `<span class="num">Liber/folio ${esc(d.lf)}</span>`)}
         ${row("Land use", use)}
         ${row("Zoning", d.z && `<span class="num">${esc(d.z)}</span>`)}
@@ -272,7 +285,7 @@
       </dl>
       <div class="src">
         Owner of record and values from SDAT via PG County DPIE${asOfLabel ? `, as of ${esc(asOfLabel)}` : ""}.
-        Only the most recent sale is in the bulk data.
+        Sales combine SDAT's last sale with Maryland's 12-month Property Sales layer, collected since Nov 2026.
         <div class="links">
           ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">SDAT record ↗</a><span class="dim"> needs a free SDAT login</span><br>` : ""}
           <a href="https://sdat.dat.maryland.gov/RealProperty/Pages/default.aspx" target="_blank" rel="noopener">SDAT public search ↗</a><span class="dim"> Prince George's · district ${esc(d.acct.split("-")[0])} · account ${esc(d.acct.split("-")[1] || "")}. Shows the last 3 transfers.</span><br>
@@ -347,7 +360,9 @@
   }
   function wireBack() {
     const b = body.querySelector(".back");
-    if (b && lastGroup != null) b.addEventListener("click", () => showGroup(lastGroup));
+    if (!b) return;
+    if (b.hasAttribute("data-backp") && lastProject) b.addEventListener("click", () => showProject(lastProject));
+    else if (lastGroup != null) b.addEventListener("click", () => showGroup(lastGroup));
   }
   // In the parcel drawer: link to the owner group when it holds more than this one name.
   function fillGroupRow(d) {
@@ -400,7 +415,9 @@
     }
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "/" && document.activeElement !== input) { e.preventDefault(); input.focus(); }
+    const el = document.activeElement;
+    const typing = el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    if (e.key === "/" && !typing) { e.preventDefault(); input.focus(); }
   });
   document.addEventListener("click", (e) => { if (!e.target.closest(".search")) closeResults(); });
   function closeResults() { results.hidden = true; active = -1; }
@@ -488,6 +505,139 @@
       map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 15 });
     }
   }
+
+  // ---------- projects (saved in this browser only) ----------
+  const PKEY = "rem.projects.v1";
+  let projects = [], storageOK = true;
+  try { projects = JSON.parse(localStorage.getItem(PKEY) || "[]"); } catch (e) { storageOK = false; projects = []; }
+  function saveProjects() {
+    try { localStorage.setItem(PKEY, JSON.stringify(projects)); storageOK = true; } catch (e) { storageOK = false; }
+    renderProjMenu();
+  }
+  const newId = () => "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  function createProject(name, ids = []) {
+    const p = { id: newId(), name: name.trim() || "Untitled project", ids: [...ids], notes: "", doc: "",
+                created: new Date().toISOString(), updated: new Date().toISOString() };
+    projects.unshift(p); saveProjects(); return p;
+  }
+  const touch = (p) => { p.updated = new Date().toISOString(); saveProjects(); };
+
+  // header menu
+  const projBtn = document.getElementById("proj-btn");
+  const projMenu = document.getElementById("proj-menu");
+  function renderProjMenu() {
+    projBtn.textContent = projects.length ? `Projects ${projects.length}` : "Projects";
+    projMenu.innerHTML = `
+      ${projects.map((p) => `<button type="button" class="res" data-p="${p.id}"><span>${esc(p.name)}</span><span class="sub">${plural(p.ids.length, "parcel")}</span></button>`).join("")}
+      <form class="newproj"><input name="n" placeholder="New project name" aria-label="New project name" maxlength="80"><button class="linkish" type="submit">Create</button></form>
+      <p class="hint2">Projects are saved in this browser only. ${storageOK ? "" : "<b>This browser is blocking storage, so projects will be lost on reload.</b>"}</p>`;
+    projMenu.querySelectorAll("[data-p]").forEach((b) => b.addEventListener("click", () => { projMenu.hidden = true; showProject(b.dataset.p); }));
+    projMenu.querySelector(".newproj").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const n = e.target.n.value.trim(); if (!n) return;
+      const p = createProject(n); projMenu.hidden = true; showProject(p.id);
+    });
+  }
+  projBtn.addEventListener("click", (e) => { e.stopPropagation(); projMenu.hidden = !projMenu.hidden; });
+  document.addEventListener("click", (e) => { if (!e.target.closest("#proj-menu, #proj-btn")) projMenu.hidden = true; });
+  renderProjMenu();
+
+  // "Add to project" in the parcel drawer
+  function addProjectControl(id, d) {
+    const slot = body.querySelector("#proj-slot");
+    if (!slot) return;
+    const paint = () => {
+      const inN = projects.filter((p) => p.ids.includes(id));
+      slot.innerHTML = `<div class="projrow">
+        <button type="button" class="linkish" data-toggle>${inN.length ? `In ${plural(inN.length, "project")} ▾` : "+ Add to project"}</button>
+        <div class="projpick" hidden>
+          ${projects.map((p) => `<button type="button" class="chip" aria-pressed="${p.ids.includes(id)}" data-p="${p.id}">${esc(p.name)}</button>`).join("")}
+          <form><input name="n" placeholder="New project…" maxlength="80" aria-label="New project name"></form>
+        </div></div>`;
+      const pick = slot.querySelector(".projpick");
+      slot.querySelector("[data-toggle]").addEventListener("click", () => (pick.hidden = !pick.hidden));
+      pick.querySelectorAll("[data-p]").forEach((b) => b.addEventListener("click", () => {
+        const p = projects.find((x) => x.id === b.dataset.p);
+        p.ids = p.ids.includes(id) ? p.ids.filter((x) => x !== id) : [...p.ids, id];
+        touch(p); paint(); slot.querySelector(".projpick").hidden = false;
+      }));
+      pick.querySelector("form").addEventListener("submit", (e) => {
+        e.preventDefault(); const n = e.target.n.value.trim(); if (!n) return;
+        createProject(n, [id]); paint();
+      });
+    };
+    paint();
+  }
+
+  // project view
+  function loadMany(ids) { return Promise.all(ids.map((id) => loadShard(id).then((d) => [id, d]).catch(() => [id, null]))); }
+  function showProject(pid) {
+    const p = projects.find((x) => x.id === pid);
+    if (!p) return;
+    reqToken++;
+    const token = reqToken;
+    drawer.hidden = false;
+    body.innerHTML = `<div class="lbl">Loading project…</div>`;
+    Promise.all([loadMany(p.ids), loadIndex().catch(() => null)]).then(([rows, idx]) => {
+      if (token !== reqToken) return;
+      const ok = rows.filter(([, d]) => d);
+      const pts = ok.flatMap(([, d]) => d.c || []);
+      setSelected(p.ids, pts);
+      const ac = ok.reduce((a, [, d]) => a + (d.ac || 0), 0), tv = ok.reduce((a, [, d]) => a + (d.tv || 0), 0);
+      const groups = new Map();
+      for (const [, d] of ok) if (d.g != null && idx && idx.groups[d.g] && idx.groups[d.g].m.length > 1) groups.set(d.g, idx.groups[d.g]);
+      const sales = ok.flatMap(([id, d]) => (d.sh || (d.sd ? [{ d: d.sd, p: d.sp, deed: d.lf }] : []))
+        .map((r) => ({ ...r, where: d.a || "Account " + d.acct, who: d.pv ? "Individually owned" : d.o }))).sort((a, b) => (a.d < b.d ? 1 : -1));
+      const doc = (p.doc || "").trim();
+      const docLink = /^https?:\/\//i.test(doc) ? `<a href="${esc(doc)}" target="_blank" rel="noopener">Open ↗</a>` : "";
+      body.innerHTML = `
+        <span class="lbl">Project · saved in this browser</span>
+        <h2 contenteditable="plaintext-only" spellcheck="false" class="pname" title="Click to rename">${esc(p.name)}</h2>
+        <p class="addr">${plural(p.ids.length, "parcel")} · ${acres(ac)} · assessed ${usd(tv)}</p>
+        ${p.ids.length ? "" : `<p class="note">Empty so far. Click any parcel on the map and choose “+ Add to project”.</p>`}
+        ${ok.length ? `<div class="lbl sec">Parcels</div><ul class="plist ptab">${ok.map(([id, d]) => `
+          <li><button type="button" data-id="${esc(id)}"><span>${esc(d.a || "Account " + d.acct)}</span>
+            <span class="sub">${esc(d.pv ? "Individually owned" : d.o || "")}${d.sd ? " · sold " + d.sd.slice(0, 4) : ""}</span></button>
+            <button type="button" class="rm" data-rm="${esc(id)}" aria-label="Remove from project">×</button></li>`).join("")}</ul>` : ""}
+        ${groups.size ? `<div class="lbl sec">Owner groups involved</div><ul class="plist">${[...groups].map(([gid, g]) => `
+          <li><button type="button" data-g="${gid}">${esc(g.l)} <span class="sub">${plural(g.m.length, "entity")} · ${plural(g.ids.length, "parcel")}</span></button></li>`).join("")}</ul>` : ""}
+        ${sales.length ? `<div class="lbl sec">Sales, newest first</div><ul class="sales tl">${sales.map((r) => `
+          <li><span class="num">${esc(date(r.d))}</span> <span class="num">${r.p ? usd(r.p) : "no price"}</span>
+          <span class="sub">${esc(r.where)}${r.who ? " · " + esc(r.who) : ""}${r.deed ? " · deed " + esc(r.deed) : ""}</span></li>`).join("")}</ul>` : ""}
+        <div class="lbl sec">Notes</div>
+        <textarea class="pnotes" rows="6" placeholder="Your research notes, with links. Saved as you type.">${esc(p.notes || "")}</textarea>
+        <div class="lbl sec">Research doc</div>
+        <div class="pdoc"><input class="pdocin" placeholder="Paste a Google Doc link" value="${esc(doc)}"> ${docLink}</div>
+        <div class="pact"><button type="button" class="linkish" data-export>Export</button>
+          <button type="button" class="linkish danger" data-del>Delete project</button></div>`;
+      body.querySelectorAll(".ptab [data-id]").forEach((b) => b.addEventListener("click", () =>
+        select(b.dataset.id, { fly: true, back: `<button type="button" class="back linkish" data-backp>← ${esc(p.name)}</button>` })));
+      body.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => {
+        p.ids = p.ids.filter((x) => x !== b.dataset.rm); touch(p); showProject(p.id); }));
+      body.querySelectorAll("[data-g]").forEach((b) => b.addEventListener("click", () => showGroup(+b.dataset.g)));
+      const nm = body.querySelector(".pname");
+      nm.addEventListener("blur", () => { const v = nm.textContent.trim(); if (v && v !== p.name) { p.name = v.slice(0, 80); touch(p); } });
+      nm.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); nm.blur(); } });
+      let t = 0;
+      body.querySelector(".pnotes").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { p.notes = e.target.value; touch(p); }, 400); });
+      body.querySelector(".pdocin").addEventListener("change", (e) => { p.doc = e.target.value.trim(); touch(p); showProject(p.id); });
+      body.querySelector("[data-export]").addEventListener("click", () => {
+        const blob = new Blob([JSON.stringify(p, null, 2)], { type: "application/json" });
+        const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: p.name.replace(/[^\w-]+/g, "-") + ".json" });
+        a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      });
+      body.querySelector("[data-del]").addEventListener("click", () => {
+        if (!confirm(`Delete the project “${p.name}”? This can't be undone.`)) return;
+        projects = projects.filter((x) => x.id !== p.id); saveProjects(); closeDrawer();
+      });
+      lastProject = p.id;
+      if (map && pts.length) {
+        const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
+        map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: drawerPad(), maxZoom: 16.5 });
+      }
+    });
+  }
+  let lastProject = null;
 
   // ---------- footer + limits ----------
   let asOfLabel = null;

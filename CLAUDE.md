@@ -19,10 +19,12 @@ The full brief is in [HANDOFF.md](HANDOFF.md). Read it before starting a milesto
 ```
 scripts/fetch_parcels.py   page PG County "Property Flattened" layer -> data/raw/pages/ (cached, resumable)
 scripts/build_parcels.py   classify owners, apply privacy rule -> data/build/parcels.geojsonl, web/data/parcels/NNN.json, web/data/search.json, web/data/meta.json
+scripts/fetch_sales.py     MD iMAP Property Sales (rolling 12 months) -> data/history/sales.json (cumulative, committed; never delete)
 scripts/build_tiles.sh     tippecanoe -> web/data/parcels.pmtiles
 web/                       static site (MapLibre GL + pmtiles), deployed to GitHub Pages by .github/workflows/pages.yml
 ```
-Rebuild: `python3 scripts/fetch_parcels.py && python3 scripts/build_parcels.py && scripts/build_tiles.sh`
+Rebuild: `python3 scripts/fetch_parcels.py && python3 scripts/fetch_sales.py && python3 scripts/build_parcels.py && scripts/build_tiles.sh`
+Run fetch_sales.py at least every few months: the state only publishes the last 12 months, and history.json is how older sales are kept.
 Preview: `cd web && python3 -m http.server 8000`. The server must support Range requests for PMTiles; Python's doesn't, so use `npx http-server web -p 8000` instead.
 
 ## Owner groups (M3)
@@ -34,6 +36,9 @@ Preview: `cd web && python3 -m http.server 8000`. The server must support Range 
    "wealth_web": "https://alxndrhq.github.io/historical-wealth-mind-map/#/p/<id>" }]
 ```
 The build fails if an alias has no `sources`.
+
+## Projects
+User-created research projects live only in the viewer's browser (localStorage key `rem.projects.v1`), with an Export button. The site never generates projects on its own.
 
 ## Data source note
 M1 uses the PG County DPIE "Property Flattened" layer (PG-only, already joined to SDAT). MD iMAP was down for maintenance on 2026-11-10. Keep MD iMAP Parcel Boundaries as the statewide cross-check.
