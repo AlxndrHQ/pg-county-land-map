@@ -600,7 +600,7 @@
         <span class="lbl">Project · saved in this browser</span>
         <h2 contenteditable="plaintext-only" spellcheck="false" class="pname" title="Click to rename">${esc(p.name)}</h2>
         <p class="addr">${plural(p.ids.length, "parcel")} · ${acres(ac)} · assessed ${usd(tv)}</p>
-        ${p.ids.length ? "" : `<p class="note">Empty so far. Click any parcel on the map and choose “+ Add to project”.</p>`}
+        ${p.ids.length ? "" : `<p class="note">No parcels yet. Click any parcel on the map and choose “+ Add to project”.</p>`}
         ${ok.length ? `<div class="lbl sec">Parcels</div><ul class="plist ptab">${ok.map(([id, d]) => `
           <li><button type="button" data-id="${esc(id)}"><span>${esc(d.a || "Account " + d.acct)}</span>
             <span class="sub">${esc(d.pv ? "Individually owned" : d.o || "")}${d.sd ? " · sold " + d.sd.slice(0, 4) : ""}</span></button>
@@ -618,9 +618,11 @@
             <button class="linkish" type="submit">Add</button>
             <span class="syncstat">${syncCfg.url
               ? `Sends to ${syncCfg.doc ? `<a href="${esc(syncCfg.doc)}" target="_blank" rel="noopener">Project Notes ↗</a>` : "your Project Notes doc"}`
-              : `Saved in this browser · <button type="button" class="linkish" data-sync>Connect Google Doc</button>`}</span>
+              : "Saved in this browser"}</span>
           </div>
         </form>
+        ${syncCfg.url ? "" : `<div class="synccta"><span>Send these notes to your Google Doc automatically.</span>
+          <button type="button" class="linkish" data-sync>Set it up (one time, about 3 min) →</button></div>`}
         <ul class="nlog">${(p.log || []).slice().reverse().map((n) => `
           <li><span class="sub">${esc(new Date(n.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}
             · ${n.kind === "question" ? "Question" : "Note"} · ${n.sent ? "in Google Doc" : syncCfg.url ? "not sent yet" : "this browser only"}</span>
@@ -646,7 +648,7 @@
       };
       nf.addEventListener("submit", (e) => { e.preventDefault(); addNote(); });
       nf.t.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addNote(); } });
-      const sl = body.querySelector(".syncstat [data-sync]"); if (sl) sl.addEventListener("click", showSyncSettings);
+      const sl = body.querySelector(".synccta [data-sync]"); if (sl) sl.addEventListener("click", showSyncSettings);
       body.querySelector(".pdocin").addEventListener("change", (e) => { p.doc = e.target.value.trim(); touch(p); showProject(p.id); });
       body.querySelector("[data-export]").addEventListener("click", () => {
         const blob = new Blob([JSON.stringify(p, null, 2)], { type: "application/json" });
@@ -723,8 +725,8 @@
       <h2>Connect Google Doc</h2>
       <p class="addr">Notes and questions you add to a project are sent to your "Real Estate Map · Project Notes" doc, newest first. Nothing is stored on this website; the link and key below stay in this browser.</p>
       <ol class="steps">
-        <li>Open the Project Notes doc, then <b>Extensions › Apps Script</b>.</li>
-        <li>Replace Code.gs with <a href="https://github.com/AlxndrHQ/pg-county-land-map/blob/main/scripts/apps-script/project-notes.gs" target="_blank" rel="noopener">this script ↗</a> and save.</li>
+        <li>In Google Drive, open <b>AI Collaboration › Claude Projects › Real Estate Map › Real Estate Map · Project Notes</b>, then <b>Extensions › Apps Script</b>.</li>
+        <li><button type="button" class="linkish" data-copy>Copy the script</button>, select everything in Code.gs, paste over it, and save (⌘S). <span class="sub copymsg"></span></li>
         <li>Run <b>setup</b> once, approve the prompt, and copy the key from the Execution log.</li>
         <li><b>Deploy › New deployment › Web app</b>: execute as Me, access Anyone. Copy the Web app URL.</li>
         <li>Paste both below and press Test.</li>
@@ -738,6 +740,17 @@
           <span class="syncmsg sub"></span></div>
       </form>`;
     const f = body.querySelector(".syncform"), msg = body.querySelector(".syncmsg");
+    body.querySelector("[data-copy]").addEventListener("click", async () => {
+      const cm = body.querySelector(".copymsg");
+      try {
+        const r = await fetch("https://raw.githubusercontent.com/AlxndrHQ/pg-county-land-map/main/scripts/apps-script/project-notes.gs");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        await navigator.clipboard.writeText(await r.text());
+        cm.textContent = "Copied.";
+      } catch (e) {
+        cm.innerHTML = `Couldn't copy (${esc(e.message)}). <a href="https://github.com/AlxndrHQ/pg-county-land-map/blob/main/scripts/apps-script/project-notes.gs" target="_blank" rel="noopener">Open the script ↗</a> and copy it from there.`;
+      }
+    });
     f.addEventListener("submit", async (e) => {
       e.preventDefault();
       const url = f.url.value.trim(), key = f.key.value.trim(), doc = f.doc.value.trim();

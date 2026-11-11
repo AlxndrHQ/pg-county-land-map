@@ -21,6 +21,8 @@
  * or archive the deployment.
  */
 
+// Filled in when the script is created as a standalone Drive file; empty when bound to the doc.
+const DOC_ID = '';
 const KEY_PROP = 'NOTES_KEY';
 const DOC_PROP = 'NOTES_DOC_ID';
 const MARKER = 'Notes, newest first';
@@ -32,7 +34,7 @@ function setup() {
   const props = PropertiesService.getScriptProperties();
   const key = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '').slice(0, 8);
   props.setProperty(KEY_PROP, key);
-  props.setProperty(DOC_PROP, DocumentApp.getActiveDocument().getId());
+  props.setProperty(DOC_PROP, DOC_ID || DocumentApp.getActiveDocument().getId());
   Logger.log('Paste this key into the map (Projects › Connect Google Doc): ' + key);
 }
 
