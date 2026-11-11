@@ -188,3 +188,4 @@ main{flex:1;min-height:0;position:relative}
 .toast{position:fixed;left:50%;bottom:52px;transform:translateX(-50%);background:var(--text);color:var(--bg);font:13px var(--sans);padding:8px 14px;border-radius:2px;z-index:20;max-width:min(520px,calc(100% - 32px))}
 .synccta{display:flex;flex-direction:column;gap:4px;margin-top:12px;padding:10px 12px;border:1px solid var(--accent);border-radius:2px;background:var(--accent-soft);font-size:13px}
 .synccta .linkish{align-self:flex-start;color:var(--accent);text-transform:none;letter-spacing:0;font:500 13px var(--sans);border-bottom-color:var(--accent)}
+.syncform button{white-space:nowrap;flex:none}
