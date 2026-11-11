@@ -746,7 +746,9 @@
         const r = await fetch("https://raw.githubusercontent.com/AlxndrHQ/pg-county-land-map/main/scripts/apps-script/project-notes.gs");
         if (!r.ok) throw new Error("HTTP " + r.status);
         await navigator.clipboard.writeText(await r.text());
-        cm.textContent = "Copied.";
+        const btn = body.querySelector("[data-copy]");
+        btn.textContent = "Copied to clipboard ✓";
+        cm.textContent = "Now paste it into Code.gs.";
       } catch (e) {
         cm.innerHTML = `Couldn't copy (${esc(e.message)}). <a href="https://github.com/AlxndrHQ/pg-county-land-map/blob/main/scripts/apps-script/project-notes.gs" target="_blank" rel="noopener">Open the script ↗</a> and copy it from there.`;
       }
