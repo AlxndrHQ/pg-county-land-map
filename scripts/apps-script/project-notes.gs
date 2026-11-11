@@ -140,8 +140,10 @@ function geminiKey_() { return PropertiesService.getScriptProperties().getProper
 /** Run once from the editor after adding GEMINI_API_KEY: approves permissions and picks a model. */
 function setupAnswers() {
   if (!geminiKey_()) throw new Error('Add GEMINI_API_KEY under Project Settings › Script Properties first.');
-  PropertiesService.getScriptProperties().deleteProperty('GEMINI_MODEL');
-  Logger.log('Using model: ' + model_());
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('GEMINI_MODEL'); props.deleteProperty('GEMINI_MODELS');
+  Object.keys(props.getProperties()).forEach(function (k) { if (k.indexOf('tried_') === 0) props.deleteProperty(k); });
+  Logger.log('Models to try, in order: ' + models_().join(', '));
   scheduleAnswers_(); ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'answerPending') ScriptApp.deleteTrigger(t);
   });
@@ -168,7 +170,12 @@ function answerPending() {
     const tries = Number(props.getProperty(job.tag) || 0) + 1;
     props.setProperty(job.tag, String(tries));
     let ans;
-    try { ans = askGemini_(job); } catch (err) { Logger.log('Gemini failed: ' + err.message); if (tries < 2) scheduleAnswers_(); return; }
+    try { ans = askGemini_(job); } catch (err) {
+      Logger.log('Gemini failed: ' + err.message);
+      if (err.quota) props.setProperty(job.tag, String(tries - 1));   // not this question's fault; it stays queued
+      else if (tries < 2) scheduleAnswers_();
+      return;
+    }
     lock.waitLock(30000);
     try {
       const doc = openDoc_(), body = doc.getBody();
@@ -206,36 +213,56 @@ function nextQuestion_(body, props, wantTag) {
   return null;
 }
 
-function model_() {
+/** Flash models to try, newest first; the last one that worked goes first. */
+function models_() {
   const props = PropertiesService.getScriptProperties();
-  let m = props.getProperty('GEMINI_MODEL');
-  if (m) return m;
-  // pick the newest "flash" model that can generate text, so the script survives model retirements
+  let list = JSON.parse(props.getProperty('GEMINI_MODELS') || 'null');
+  if (!list) {
+    list = listFlash_();
+    props.setProperty('GEMINI_MODELS', JSON.stringify(list));
+  }
+  const good = props.getProperty('GEMINI_MODEL');
+  return good ? [good].concat(list.filter(function (m) { return m !== good; })) : list;
+}
+
+function listFlash_() {
+  // newest "flash" models that can generate text, so the script survives model retirements
   const r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
     { headers: { 'x-goog-api-key': geminiKey_() }, muteHttpExceptions: true });
   if (r.getResponseCode() !== 200) throw new Error('Gemini key rejected: ' + r.getContentText().slice(0, 200));
   const names = (JSON.parse(r.getContentText()).models || [])
     .filter(function (x) { return (x.supportedGenerationMethods || []).indexOf('generateContent') >= 0; })
     .map(function (x) { return x.name.replace(/^models\//, ''); })
-    .filter(function (n) { return /^gemini-[\d.]+-flash$/.test(n); })
-    .sort(function (a, b) { return parseFloat(b.split('-')[1]) - parseFloat(a.split('-')[1]); });
-  m = names[0] || 'gemini-2.5-flash';
-  props.setProperty('GEMINI_MODEL', m);
-  return m;
+    .filter(function (n) { return /^gemini-[\d.]+-flash(-lite)?$/.test(n); })
+    .sort(function (a, b) {
+      const v = parseFloat(b.split('-')[1]) - parseFloat(a.split('-')[1]);
+      return v || (a.indexOf('-lite') >= 0 ? 1 : 0) - (b.indexOf('-lite') >= 0 ? 1 : 0);
+    });
+  return names.length ? names.slice(0, 8) : ['gemini-2.5-flash'];
 }
 
 function askGemini_(q) {
   const ctx = q.head + (q.parcels.length ? '\nParcels it is about: ' + q.parcels.join('; ') : '');
-  const r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model_() + ':generateContent', {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { 'x-goog-api-key': geminiKey_() },
-    payload: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM }] },
-      contents: [{ role: 'user', parts: [{ text: 'Note heading: ' + ctx + '\nQuestion: ' + q.question }] }],
-      tools: [{ google_search: {} }],
-    }),
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: SYSTEM }] },
+    contents: [{ role: 'user', parts: [{ text: 'Note heading: ' + ctx + '\nQuestion: ' + q.question }] }],
+    tools: [{ google_search: {} }],
   });
-  if (r.getResponseCode() !== 200) throw new Error('HTTP ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 300));
+  let r = null, last = '';
+  const models = models_();
+  for (let i = 0; i < models.length; i++) {
+    r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'x-goog-api-key': geminiKey_() }, payload: payload,
+    });
+    const code = r.getResponseCode();
+    if (code === 200) { PropertiesService.getScriptProperties().setProperty('GEMINI_MODEL', models[i]); Logger.log('Answered with ' + models[i]); break; }
+    last = models[i] + ' HTTP ' + code + ': ' + r.getContentText().slice(0, 200);
+    Logger.log('Skipping ' + last);
+    if (code !== 429 && code !== 404 && code !== 400 && code !== 403) throw new Error(last);
+    r = null;
+  }
+  if (!r) { const e = new Error('no model with free quota left today (' + last + ')'); e.quota = true; throw e; }
   const c = (JSON.parse(r.getContentText()).candidates || [])[0] || {};
   const text = ((c.content && c.content.parts) || []).map(function (p) { return p.text || ''; }).join('').replace(/\s+/g, ' ').trim();
   if (!text) throw new Error('empty answer');
